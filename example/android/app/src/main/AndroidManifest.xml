@@ -1,0 +1,65 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="ssg_shell_example"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- 壳的配置。§9.6 要求 B 面开启时冷启动直接加载 Web，那一刻 Dart 还没上线，
+             所以入口地址和渠道码要能从 Manifest 读到。 -->
+        <meta-data
+            android:name="com.ssg.shell.ENTRY_URL"
+            android:value="https://www.google.com/" />
+        <meta-data
+            android:name="com.ssg.shell.CHANNEL_CODE"
+            android:value="ch001" />
+        <!-- §8.4 体验与性能 2：B 面未开启时 ImActivity 转去 A 面并结束自己。 -->
+        <meta-data
+            android:name="com.ssg.shell.A_SIDE_ACTIVITY"
+            android:value="com.ssg.ssg_shell_example.MainActivity" />
+        <!-- §8.4 体验与性能 1：进程启动即创建 WebView 并开始加载。
+             这个示例把 A 面当启动页，所以交给 Dart 调 preload()，这里先关着。
+             真要让 ImActivity 当冷启动第一个 Activity 时，把它打开，并在上面
+             给 ImActivity merge 一个 LAUNCHER intent-filter。 -->
+        <meta-data
+            android:name="com.ssg.shell.AUTO_PRELOAD"
+            android:value="false" />
+
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <!-- Required to query activities that can process text, see:
+         https://developer.android.com/training/package-visibility and
+         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+
+         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>

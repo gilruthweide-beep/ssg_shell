@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- §9.6 原生重试页。宿主可覆盖做本地化。 -->
+    <string name="ssg_shell_error_title">暂时打不开</string>
+    <string name="ssg_shell_error_body">请检查网络后重试</string>
+    <string name="ssg_shell_error_retry">重试</string>
+    <string name="ssg_shell_ssl_body">安全连接校验失败，请检查网络环境后重试</string>
+    <string name="ssg_shell_kernel_outdated">系统 WebView 版本过低，建议更新「Android System WebView」或 Chrome 后使用</string>
+    <string name="ssg_shell_kernel_update">去更新</string>
+    <string name="ssg_shell_kernel_ignore">忽略</string>
+</resources>

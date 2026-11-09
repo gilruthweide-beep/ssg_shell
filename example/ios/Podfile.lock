@@ -1,0 +1,28 @@
+PODS:
+  - Flutter (1.0.0)
+  - integration_test (0.0.1):
+    - Flutter
+  - ssg_shell (1.0.2):
+    - Flutter
+
+DEPENDENCIES:
+  - Flutter (from `Flutter`)
+  - integration_test (from `.symlinks/plugins/integration_test/ios`)
+  - ssg_shell (from `.symlinks/plugins/ssg_shell/ios`)
+
+EXTERNAL SOURCES:
+  Flutter:
+    :path: Flutter
+  integration_test:
+    :path: ".symlinks/plugins/integration_test/ios"
+  ssg_shell:
+    :path: ".symlinks/plugins/ssg_shell/ios"
+
+SPEC CHECKSUMS:
+  Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
+  integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
+  ssg_shell: 30f877003386b7d03c30d46d89ce5b49ff5468db
+
+PODFILE CHECKSUM: 8224e8f90ddc5e438c350e669939fff469ab332c
+
+COCOAPODS: 1.17.0

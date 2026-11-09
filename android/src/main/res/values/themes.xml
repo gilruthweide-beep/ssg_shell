@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- §8.4 体验与性能 3 / §9.4：安全区外的状态栏、底部条，以及窗口背景，
+         一律白色，状态栏深色图标。登录页和深色模式下也一样，不按页面取色。
+         §9.4：不开 edge-to-edge，WebView 位于状态栏与导航栏之间。 -->
+    <style name="Theme.SsgShell.Im" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ssg_shell_surface</item>
+        <item name="postSplashScreenTheme">@style/Theme.SsgShell.Im.Content</item>
+    </style>
+
+    <style name="Theme.SsgShell.Im.Content" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/ssg_shell_surface</item>
+        <item name="android:statusBarColor">@color/ssg_shell_surface</item>
+        <item name="android:navigationBarColor">@color/ssg_shell_surface</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">default</item>
+    </style>
+</resources>

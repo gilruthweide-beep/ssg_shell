@@ -1,0 +1,28 @@
+name: ssg_shell
+description: "马甲包原生壳：WebView 容器注入、事件通道、OneSignal 深链、假死防护。接口由 Pigeon 生成，Android / iOS 行为一致。"
+version: 1.0.2
+homepage: https://example.com/ssg-shell
+publish_to: none
+
+environment:
+  sdk: ^3.7.2
+  flutter: '>=3.16.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  pigeon: ^25.3.1
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.ssg.ssg_shell
+        pluginClass: SsgShellPlugin
+      ios:
+        pluginClass: SsgShellPlugin
