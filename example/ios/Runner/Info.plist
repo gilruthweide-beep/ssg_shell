@@ -50,9 +50,7 @@
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于选择并发送照片和视频</string>
 	<key>SSGShellEntryUrl</key>
-	<string>https://www.google.com/</string>
-	<key>SSGShellChannelCode</key>
-	<string>ch001</string>
+	<string>https://web217-test-2.ssg18app.com/</string>
 	<key>SSGShellAutoPreload</key>
 	<false/>
 </dict>

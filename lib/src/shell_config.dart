@@ -7,6 +7,7 @@ import 'messages.g.dart';
 class ShellConfig {
   const ShellConfig({
     required this.entryUrl,
+    @Deprecated('Put channelcode in entryUrl; this value is ignored.')
     this.channelCode = '',
     this.shellVersion = '',
     this.bSideEnabled = true,
@@ -27,14 +28,20 @@ class ShellConfig {
     this.webViewFullscreen = false,
   });
 
-  /// §2.1 入口地址，**不要**自己拼 `channelCode`，原生会拼（参数名大小写不敏感，
-  /// 已经带了就不会重复追加）。
+  /// §2.1 原样加载的完整落地 URL。
+  ///
+  /// 渠道码可选，需要归因时直接写进 URL，例如
+  /// `https://im.example.com/?channelcode=ch001`。壳不补参、不删参、不重拼 query，
+  /// 参数名大小写、取值和存储由 Web 负责。
   ///
   /// §8.1 必须是 HTTPS：`isSecureContext === false` 时 Service Worker 注册不了，
   /// 媒体加载与缓存全部降级。
   final String entryUrl;
 
-  /// §2.1 渠道码。空串表示放弃归因 —— 归因事件里的 `channelCode` 会是空字符串。
+  /// 旧版兼容字段，不再参与 URL 加载或渠道归因。
+  ///
+  /// 渠道码通过 [entryUrl] 传入；不带渠道码也是有效配置。
+  @Deprecated('Put channelcode in entryUrl; this value is ignored.')
   final String channelCode;
 
   /// §1.1 / §2.2 壳版本，同时进 `__SSG_SHELL__` 和 UA 后缀。
@@ -111,7 +118,8 @@ class ShellConfig {
 
   ShellConfigDto toDto() => ShellConfigDto(
         entryUrl: entryUrl,
-        channelCode: channelCode,
+        // 保留 Pigeon 的旧字段位置，避免改变消息格式；原生不再使用它。
+        channelCode: '',
         shellVersion: shellVersion,
         bSideEnabled: bSideEnabled,
         splashTimeoutMs: splashTimeout.inMilliseconds,
@@ -133,6 +141,7 @@ class ShellConfig {
 
   ShellConfig copyWith({
     String? entryUrl,
+    @Deprecated('Put channelcode in entryUrl; this value is ignored.')
     String? channelCode,
     String? shellVersion,
     bool? bSideEnabled,
@@ -154,6 +163,8 @@ class ShellConfig {
   }) =>
       ShellConfig(
         entryUrl: entryUrl ?? this.entryUrl,
+        // 仅保留旧字段的副本，URL 和 Pigeon 配置不会使用它。
+        // ignore: deprecated_member_use_from_same_package
         channelCode: channelCode ?? this.channelCode,
         shellVersion: shellVersion ?? this.shellVersion,
         bSideEnabled: bSideEnabled ?? this.bSideEnabled,
@@ -176,6 +187,6 @@ class ShellConfig {
       );
 
   @override
-  String toString() => 'ShellConfig(entryUrl: $entryUrl, channelCode: $channelCode, '
+  String toString() => 'ShellConfig(entryUrl: $entryUrl, '
       'shellVersion: $shellVersion, bSideEnabled: $bSideEnabled)';
 }

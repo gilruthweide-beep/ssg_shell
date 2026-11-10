@@ -26,13 +26,10 @@
             </intent-filter>
         </activity>
         <!-- 壳的配置。§9.6 要求 B 面开启时冷启动直接加载 Web，那一刻 Dart 还没上线，
-             所以入口地址和渠道码要能从 Manifest 读到。 -->
+             所以完整入口 URL（含可选渠道码）要能从 Manifest 读到。 -->
         <meta-data
             android:name="com.ssg.shell.ENTRY_URL"
-            android:value="https://www.google.com/" />
-        <meta-data
-            android:name="com.ssg.shell.CHANNEL_CODE"
-            android:value="ch001" />
+            android:value="https://web217-test-2.ssg18app.com/" />
         <!-- §8.4 体验与性能 2：B 面未开启时 ImActivity 转去 A 面并结束自己。 -->
         <meta-data
             android:name="com.ssg.shell.A_SIDE_ACTIVITY"

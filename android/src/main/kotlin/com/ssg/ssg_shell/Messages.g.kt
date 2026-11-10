@@ -232,9 +232,9 @@ enum class ShellEventType(val raw: Int) {
  * Generated class from Pigeon that represents data sent in messages.
  */
 data class ShellConfigDto (
-  /** §2.1 入口地址，不含 `channelCode`，由原生拼。 */
+  /** §2.1 原样加载的完整落地 URL，可包含可选的 `channelcode` 查询参数。 */
   val entryUrl: String,
-  /** §2.1 渠道码，空串表示放弃归因。 */
+  /** 旧版消息格式的兼容字段，已忽略；渠道码只通过入口 URL 传入。 */
   val channelCode: String,
   /** §1.1 / §2.2 壳版本，同时进 `__SSG_SHELL__` 和 UA。 */
   val shellVersion: String,
@@ -673,6 +673,11 @@ data class ShellDiagnostics (
   val entryUrl: String,
   val currentUrl: String,
   val userAgent: String,
+  /**
+   * 最近一次 Web 注册、登录或发消息事件携带的渠道码。
+   *
+   * 为空表示尚未收到归因事件或 Web 未提供渠道码；渠道归因是可选的。
+   */
   val channelCode: String,
   /** §1.3 自检：`document.documentElement.classList.contains('is-web-browser') === false`。 */
   val injectionOk: Boolean,

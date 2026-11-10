@@ -11,7 +11,7 @@ App = 原生壳 + WebView 加载 IM Web。业务逻辑、UI、长连接、消息
 | 条款 | 做的事 | 实现 |
 |---|---|---|
 | §1 | `window.__SSG_SHELL__` 文档开始前注入 | `ShellInjection` |
-| §2 | 入口地址拼 `channelCode`、UA 追加 `SSGShell/<ver>` | `ShellConfig` / `ShellInjection` |
+| §2 | 落地 URL 原样加载（渠道码可选）、UA 追加 `SSGShell/<ver>` | `ShellConfig` / `ShellInjection` |
 | §3 | 十个 Web → Native 事件 | `JsBridge`（Android）/ `ScriptMessageRouter`（iOS）+ `WebEventParser` |
 | §4 | `onForeground` / `onBackground` / `onNetwork` / `onHeartbeat` / `onMemoryWarning` / `openChat` | `ShellCore` + `ImWebViewHolder` |
 | §5 | 前台抑制、角标、深链排队 | `NotificationGate` / `BadgeApplier` / `ShellCore.openChat` |
@@ -37,8 +37,7 @@ App = 原生壳 + WebView 加载 IM Web。业务逻辑、UI、长连接、消息
 import 'package:ssg_shell/ssg_shell.dart';
 
 await SsgShell.instance.initialize(const ShellConfig(
-  entryUrl: 'https://im.example.com/',   // §8.1 必须 HTTPS
-  channelCode: 'ch001',                  // §2.1 原生负责拼进 URL
+  entryUrl: 'https://im.example.com/?channelcode=ch001', // §8.1 必须 HTTPS
 ));
 
 // §3.1 的十个事件
@@ -63,13 +62,21 @@ await SsgShell.instance.handlePushOpened(data);
 
 `ShellConfig` 的默认值就是规范值（心跳 20s、判定卡死 60s、退避 180s/600s、splash 上限 30s…），一般不用改。
 
+§2.1 的渠道码是可选的。需要归因时，把真实渠道码放进完整落地 URL；不需要时可以直接用
+`https://im.example.com/`。壳原样加载 URL，保留参数大小写、编码、重复参数和 fragment，
+不补参、不删参、不用编译期常量覆盖；渠道码的读取和存储由 Web 负责。
+
+旧的 `ShellConfig.channelCode` / `copyWith(channelCode: ...)` 已废弃且忽略，
+Android 的 `com.ssg.shell.CHANNEL_CODE` 和 iOS 的 `SSGShellChannelCode` 也不再读取。
+升级时请把渠道码迁入下面三处的完整入口 URL，并保持 Dart 与原生冷启动配置一致。
+诊断里的 `channelCode` 来自最近一次 Web 注册、登录或发消息事件；为空也属于有效情况。
+
 ### 2. Android
 
 `minSdk` 要 23。壳的 Activity、权限、R8 keep 规则都在插件的 Manifest 里，宿主只给配置：
 
 ```xml
-<meta-data android:name="com.ssg.shell.ENTRY_URL"       android:value="https://im.example.com/" />
-<meta-data android:name="com.ssg.shell.CHANNEL_CODE"    android:value="ch001" />
+<meta-data android:name="com.ssg.shell.ENTRY_URL"       android:value="https://im.example.com/?channelcode=ch001" />
 <meta-data android:name="com.ssg.shell.A_SIDE_ACTIVITY" android:value="com.example.app.MainActivity" />
 <meta-data android:name="com.ssg.shell.AUTO_PRELOAD"    android:value="true" />
 ```
@@ -100,8 +107,7 @@ B 面未开启时 `ImActivity` 会转去 `A_SIDE_ACTIVITY` 并结束自己，用
 <key>NSMicrophoneUsageDescription</key><string>用于录制并发送语音消息</string>
 <key>NSPhotoLibraryUsageDescription</key><string>用于选择并发送照片和视频</string>
 
-<key>SSGShellEntryUrl</key><string>https://im.example.com/</string>
-<key>SSGShellChannelCode</key><string>ch001</string>
+<key>SSGShellEntryUrl</key><string>https://im.example.com/?channelcode=ch001</string>
 <key>SSGShellAutoPreload</key><true/>
 <!-- §9.6 的 iOS 对应项：启动时就把容器顶上来，不先露出 Flutter 页面 -->
 <key>SSGShellAutoOpenIm</key><true/>

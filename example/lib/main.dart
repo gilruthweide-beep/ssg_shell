@@ -8,14 +8,11 @@ void main() {
   runApp(const DemoApp());
 }
 
-/// 换成自己的入口地址。§8.1 必须 HTTPS。
+/// §2.1 原样加载的完整落地 URL，§8.1 必须 HTTPS。
 ///
-/// 现在先指向 google.com 只是为了有个真的能加载出来的页面：容器、UA、安全区、
-/// 返回键、外链、兜底 reload 这些都能验。但它不是 IM Web，所以
-/// §3.1 的十个事件、§1.3 的注入自检、§11.2 的 `eventWebAlive` 都不会有 ——
-/// 那几项要换成真实入口地址才有意义。
+/// 渠道码可选，需要归因时在 URL 内配置 `channelcode` 查询参数，
+/// 并同步 Android Manifest 和 iOS Info.plist 的完整入口 URL。
 const String kEntryUrl = 'https://web217-test-2.ssg18app.com/';
-const String kChannelCode = 'ch001';
 
 class DemoApp extends StatelessWidget {
   const DemoApp({super.key});
@@ -61,7 +58,7 @@ class _ShellConsoleState extends State<ShellConsole> {
   Future<void> _boot() async {
     try {
       final info = await _shell.initialize(
-        const ShellConfig(entryUrl: kEntryUrl, channelCode: kChannelCode),
+        const ShellConfig(entryUrl: kEntryUrl),
       );
       final kernel = await _shell.getKernelInfo();
       if (!mounted) return;

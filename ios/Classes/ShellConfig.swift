@@ -11,9 +11,9 @@ import Foundation
 /// （§9.6「把上次的结果缓存在本地，冷启动直接按缓存走」）。
 struct ShellConfig {
 
-  /// §2.1 入口地址，不带 channelCode。
+  /// §2.1 完整落地 URL，原样加载；渠道码可选，由 Web 读取。
   var entryUrl: String = ""
-  /// §2.1 渠道码。
+  /// 旧版兼容字段，已忽略，不参与 URL 加载或渠道归因。
   var channelCode: String = ""
   /// §1.1 / §2.2 壳版本。
   var shellVersion: String = ""
@@ -37,19 +37,10 @@ struct ShellConfig {
 
   // ------------------------------------------------------------------ URL
 
-  /// §2.1 把 channelCode 拼进入口地址。
-  ///
-  /// 参数名大小写不敏感，所以 URL 里已经带了任意大小写的 channelCode 时不再追加，
-  /// 免得出现两个同名参数让 Web 读到空值。
+  /// §2.1 直接使用落地 URL，不解析或重拼 query。
   func resolvedUrl() -> URL? {
-    guard !entryUrl.isEmpty, var components = URLComponents(string: entryUrl) else { return nil }
-    guard !channelCode.isEmpty else { return components.url }
-    let existing = components.queryItems ?? []
-    if existing.contains(where: { $0.name.caseInsensitiveCompare(Self.channelParam) == .orderedSame }) {
-      return components.url
-    }
-    components.queryItems = existing + [URLQueryItem(name: Self.channelParam, value: channelCode)]
-    return components.url
+    guard !entryUrl.isEmpty else { return nil }
+    return URL(string: entryUrl)
   }
 
   /// §7.2 外链放行用的 host。
@@ -64,11 +55,9 @@ struct ShellConfig {
     let bundle = Bundle.main
     let defaults = UserDefaults.standard
     var config = ShellConfig()
-    // 落盘的值优先：Dart 可能改过渠道码或入口地址，那份更新。
+    // 落盘的完整入口 URL 优先，包含宿主配置的可选渠道码。
     config.entryUrl = defaults.string(forKey: keyEntryUrl)
-      ?? plistString(bundle, metaEntryUrl) ?? ""
-    config.channelCode = defaults.string(forKey: keyChannelCode)
-      ?? plistString(bundle, metaChannelCode) ?? ""
+      ?? (bundle.object(forInfoDictionaryKey: metaEntryUrl) as? String) ?? ""
     let version = defaults.string(forKey: keyShellVersion)
       ?? plistString(bundle, metaShellVersion)
     config.shellVersion = (version?.isEmpty == false ? version! : appVersion())
@@ -80,7 +69,6 @@ struct ShellConfig {
   static func fromDto(_ dto: ShellConfigDto) -> ShellConfig {
     var config = ShellConfig()
     config.entryUrl = dto.entryUrl
-    config.channelCode = dto.channelCode
     config.shellVersion = dto.shellVersion.isEmpty ? appVersion() : dto.shellVersion
     config.bSideEnabled = dto.bSideEnabled
     config.splashTimeout = TimeInterval(dto.splashTimeoutMs) / 1000
@@ -103,7 +91,6 @@ struct ShellConfig {
   func persist() {
     let defaults = UserDefaults.standard
     defaults.set(entryUrl, forKey: Self.keyEntryUrl)
-    defaults.set(channelCode, forKey: Self.keyChannelCode)
     defaults.set(shellVersion, forKey: Self.keyShellVersion)
     defaults.set(bSideEnabled, forKey: Self.keyBSide)
   }
@@ -128,16 +115,12 @@ struct ShellConfig {
 
   // --------------------------------------------------------------- 常量
 
-  private static let channelParam = "channelCode"
-
   private static let metaEntryUrl = "SSGShellEntryUrl"
-  private static let metaChannelCode = "SSGShellChannelCode"
   private static let metaShellVersion = "SSGShellVersion"
   private static let metaAutoPreload = "SSGShellAutoPreload"
   private static let metaAutoOpenIm = "SSGShellAutoOpenIm"
 
   private static let keyEntryUrl = "ssg_shell.entryUrl"
-  private static let keyChannelCode = "ssg_shell.channelCode"
   private static let keyShellVersion = "ssg_shell.shellVersion"
   private static let keyBSide = "ssg_shell.bSideEnabled"
 

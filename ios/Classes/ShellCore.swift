@@ -39,6 +39,7 @@ final class ShellCore {
   private var webVisible = false
 
   private var webReady = false
+  private var reportedChannelCode = ""
   private var lastWebReadyAtMs: Int64?
 
   /// §5.3 冷启动点通知时 Web 还没初始化完，参数要暂存，收到 webReady 再调。
@@ -110,6 +111,7 @@ final class ShellCore {
 
   func initialize(_ dto: ShellConfigDto) -> ShellInfo {
     let next = ShellConfig.fromDto(dto)
+    if next.entryUrl != config.entryUrl { reportedChannelCode = "" }
     config = next
     console.capacity = next.consoleBufferSize
     // §9.6 落盘，下次冷启动直接按缓存走，不等 Dart。
@@ -335,10 +337,10 @@ final class ShellCore {
   func diagnostics() -> ShellDiagnostics {
     ShellDiagnostics(
       shellInfo: ShellInjection.shellInfo(shellVersion: config.shellVersion),
-      entryUrl: config.resolvedUrl()?.absoluteString ?? config.entryUrl,
+      entryUrl: config.entryUrl,
       currentUrl: ImWebViewHolder.shared.currentUrl,
       userAgent: ImWebViewHolder.shared.cachedUserAgent,
-      channelCode: config.channelCode,
+      channelCode: reportedChannelCode,
       injectionOk: injectionOk && ImWebViewHolder.shared.documentStartInjected,
       imRunning: imRunning,
       appInForeground: appInForeground,
@@ -377,7 +379,7 @@ final class ShellCore {
     out += "入口地址        \(d.entryUrl)\n"
     out += "当前地址        \(d.currentUrl)\n"
     out += "UA              \(d.userAgent)\n"
-    out += "channelCode     \(d.channelCode.isEmpty ? "(空，渠道归因丢失)" : d.channelCode)\n"
+    out += "channelCode     \(d.channelCode.isEmpty ? "(未提供，可选；以 Web 归因事件为准)" : d.channelCode)\n"
     out += "注入自检        \(d.injectionOk ? "通过 shellSrc:inject" : "未通过，见 §1.2")\n"
     out += "IM 挂载         \(d.imRunning)\n"
     out += "App 前台        \(d.appInForeground)\n"
@@ -402,6 +404,10 @@ final class ShellCore {
   }
 
   private func handleWebEvent(_ event: WebEvent) {
+    // §2.1 渠道取值由 Web 负责，诊断只记录归因事件，不读取或改写 URL。
+    if event.name == .register || event.name == .login || event.name == .messageSent {
+      reportedChannelCode = event.params["channelCode"] ?? ""
+    }
     switch event.name {
     case .webReady:
       webReady = true

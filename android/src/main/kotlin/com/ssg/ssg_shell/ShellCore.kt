@@ -70,6 +70,7 @@ internal object ShellCore {
 
     @Volatile
     private var webReady: Boolean = false
+    private var reportedChannelCode: String = ""
     private var lastWebReadyAtMs: Long? = null
 
     /** §5.3 冷启动点通知时 Web 还没初始化完，参数要暂存，收到 webReady 再调。 */
@@ -141,6 +142,7 @@ internal object ShellCore {
 
     fun initialize(dto: ShellConfigDto): ShellInfo {
         val next = ShellConfig.fromDto(appContext, dto)
+        if (next.entryUrl != config.entryUrl) reportedChannelCode = ""
         config = next
         console.capacity = next.consoleBufferSize
         // §9.6 落盘，下次冷启动 ImActivity 直接按缓存走，不等 Dart。
@@ -373,7 +375,7 @@ internal object ShellCore {
         entryUrl = config.resolvedUrl(),
         currentUrl = ImWebViewHolder.currentUrl(),
         userAgent = ImWebViewHolder.userAgent(),
-        channelCode = config.channelCode,
+        channelCode = reportedChannelCode,
         injectionOk = injectionOk && ImWebViewHolder.documentStartInjected,
         imRunning = imRunning,
         appInForeground = appInForeground,
@@ -405,7 +407,7 @@ internal object ShellCore {
             appendLine("入口地址        ${d.entryUrl}")
             appendLine("当前地址        ${d.currentUrl}")
             appendLine("UA              ${d.userAgent}")
-            appendLine("channelCode     ${d.channelCode.ifBlank { "(空，渠道归因丢失)" }}")
+            appendLine("channelCode     ${d.channelCode.ifEmpty { "(未提供，可选；以 Web 归因事件为准)" }}")
             appendLine("注入自检        ${if (d.injectionOk) "通过 shellSrc:inject" else "未通过，见 §1.2"}")
             appendLine("IM 挂载         ${d.imRunning}")
             appendLine("App 前台        ${d.appInForeground}")
@@ -429,6 +431,11 @@ internal object ShellCore {
     }
 
     private fun handleWebEvent(event: WebEvent) {
+        // §2.1 渠道取值由 Web 负责，诊断只记录归因事件，不读取或改写 URL。
+        if (event.name == WebEventName.REGISTER || event.name == WebEventName.LOGIN ||
+            event.name == WebEventName.MESSAGE_SENT) {
+            reportedChannelCode = event.params["channelCode"].orEmpty()
+        }
         when (event.name) {
             WebEventName.WEB_READY -> {
                 webReady = true

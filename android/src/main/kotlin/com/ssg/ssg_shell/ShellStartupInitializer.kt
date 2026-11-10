@@ -18,8 +18,7 @@ import androidx.startup.Initializer
  * 配置来自宿主 Manifest 的 `<meta-data>` 加落盘缓存（见 [ShellConfig.fromDisk]）：
  *
  * ```xml
- * <meta-data android:name="com.ssg.shell.ENTRY_URL"     android:value="https://im.example.com/" />
- * <meta-data android:name="com.ssg.shell.CHANNEL_CODE"  android:value="ch001" />
+ * <meta-data android:name="com.ssg.shell.ENTRY_URL"     android:value="https://im.example.com/?channelcode=ch001" />
  * <meta-data android:name="com.ssg.shell.A_SIDE_ACTIVITY" android:value="com.example.app.MainActivity" />
  * <meta-data android:name="com.ssg.shell.AUTO_PRELOAD"  android:value="true" />
  * ```

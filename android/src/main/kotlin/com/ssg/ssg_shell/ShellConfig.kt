@@ -3,7 +3,6 @@ package com.ssg.ssg_shell
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
-import androidx.core.net.toUri
 
 /**
  * 壳的运行参数。
@@ -17,10 +16,10 @@ import androidx.core.net.toUri
  * 加上一份落盘的缓存（§9.6「把上次的结果缓存在本地，冷启动直接按缓存走」）。
  */
 internal data class ShellConfig(
-    /** §2.1 入口地址，不带 channelCode。 */
+    /** §2.1 完整落地 URL，原样加载；渠道码可选，由 Web 读取。 */
     val entryUrl: String,
-    /** §2.1 渠道码。 */
-    val channelCode: String,
+    /** 旧版兼容字段，已忽略，不参与 URL 加载或渠道归因。 */
+    val channelCode: String = "",
     /** §1.1 / §2.2 壳版本。 */
     val shellVersion: String,
     /** §9.6 B 面开关。 */
@@ -48,29 +47,14 @@ internal data class ShellConfig(
      */
     val webViewFullscreen: Boolean = false,
 ) {
-    /**
-     * §2.1 把 channelCode 拼进入口地址。
-     *
-     * 参数名大小写不敏感，所以 URL 里已经带了任意大小写的 channelCode 时不再追加，
-     * 避免出现两个同名参数让 Web 读到空值。
-     */
-    fun resolvedUrl(): String {
-        if (entryUrl.isBlank()) return entryUrl
-        if (channelCode.isBlank()) return entryUrl
-        val uri = runCatching { entryUrl.toUri() }.getOrNull() ?: return entryUrl
-        val existing = runCatching { uri.queryParameterNames }.getOrNull().orEmpty()
-        if (existing.any { it.equals(CHANNEL_PARAM, ignoreCase = true) }) return entryUrl
-        return uri.buildUpon().appendQueryParameter(CHANNEL_PARAM, channelCode).build().toString()
-    }
+    /** §2.1 原样返回落地 URL，不解析或重拼 query。 */
+    fun resolvedUrl(): String = entryUrl
 
     /** §10.5 判定「是不是 IM 域名」用的 host，用于 §7.1 的外链放行。 */
     fun entryHost(): String? = runCatching { Uri.parse(entryUrl).host }.getOrNull()
 
     internal companion object {
-        private const val CHANNEL_PARAM = "channelCode"
-
         private const val META_ENTRY_URL = "com.ssg.shell.ENTRY_URL"
-        private const val META_CHANNEL_CODE = "com.ssg.shell.CHANNEL_CODE"
         private const val META_SHELL_VERSION = "com.ssg.shell.SHELL_VERSION"
         internal const val META_A_SIDE_ACTIVITY = "com.ssg.shell.A_SIDE_ACTIVITY"
         internal const val META_AUTO_PRELOAD = "com.ssg.shell.AUTO_PRELOAD"
@@ -78,7 +62,6 @@ internal data class ShellConfig(
 
         private const val PREFS = "ssg_shell"
         private const val KEY_ENTRY_URL = "entryUrl"
-        private const val KEY_CHANNEL_CODE = "channelCode"
         private const val KEY_SHELL_VERSION = "shellVersion"
         private const val KEY_B_SIDE = "bSideEnabled"
         private const val KEY_KERNEL_WARNED = "kernelWarned"
@@ -90,12 +73,10 @@ internal data class ShellConfig(
             val prefs = context.applicationContext
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val metaEntry = meta?.getString(META_ENTRY_URL).orEmpty()
-            val metaChannel = meta?.getString(META_CHANNEL_CODE).orEmpty()
             val metaVersion = meta?.getString(META_SHELL_VERSION).orEmpty()
             return ShellConfig(
-                // 落盘的值优先：Dart 可能改过渠道码或入口地址，那份更新。
+                // 落盘的完整入口 URL 优先，包含宿主配置的可选渠道码。
                 entryUrl = prefs.getString(KEY_ENTRY_URL, null) ?: metaEntry,
-                channelCode = prefs.getString(KEY_CHANNEL_CODE, null) ?: metaChannel,
                 shellVersion = prefs.getString(KEY_SHELL_VERSION, null)
                     ?: metaVersion.ifBlank { appVersionName(context) },
                 // §9.6 没有缓存时默认关：没确认过 B 面就不要抢在 A 面前面。
@@ -110,7 +91,6 @@ internal data class ShellConfig(
 
         fun fromDto(context: Context, dto: ShellConfigDto): ShellConfig = ShellConfig(
             entryUrl = dto.entryUrl,
-            channelCode = dto.channelCode,
             shellVersion = dto.shellVersion.ifBlank { appVersionName(context) },
             bSideEnabled = dto.bSideEnabled,
             splashTimeoutMs = dto.splashTimeoutMs,
@@ -134,7 +114,6 @@ internal data class ShellConfig(
             context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_ENTRY_URL, config.entryUrl)
-                .putString(KEY_CHANNEL_CODE, config.channelCode)
                 .putString(KEY_SHELL_VERSION, config.shellVersion)
                 .putBoolean(KEY_B_SIDE, config.bSideEnabled)
                 // §9.6 的冷启动路径上 ImActivity 读的是这份，所以布局模式也要落盘。

@@ -15,8 +15,21 @@ void main() {
   // 不联真实入口地址：这几条都不需要页面加载完成。
   const ShellConfig config = ShellConfig(
     entryUrl: 'https://www.google.com/',
-    channelCode: 'ch001',
   );
+
+  testWidgets('§2.1 原生配置保留完整落地 URL', (WidgetTester tester) async {
+    const String entryUrl = 'https://im.example.com/?ChannelCode=from%2fweb'
+        '&tag=a+%20b&tag=%2526#/chat?channelcode=fragment';
+    await SsgShell.instance.initialize(
+      const ShellConfig(entryUrl: entryUrl),
+      requestNotificationAfterLogin: false,
+      autoPreload: false,
+    );
+
+    final ShellDiagnostics diagnostics = await SsgShell.instance.getDiagnostics();
+    expect(diagnostics.entryUrl, entryUrl);
+    expect(diagnostics.channelCode, isEmpty);
+  });
 
   testWidgets('§1.1 initialize 返回的六个字段齐全', (WidgetTester tester) async {
     final ShellInfo info = await SsgShell.instance.initialize(

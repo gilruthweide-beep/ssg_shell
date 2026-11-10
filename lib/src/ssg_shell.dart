@@ -14,8 +14,7 @@ import 'shell_config.dart';
 ///
 /// ```dart
 /// await SsgShell.instance.initialize(const ShellConfig(
-///   entryUrl: 'https://im.example.com/',
-///   channelCode: 'ch001',
+///   entryUrl: 'https://im.example.com/?channelcode=ch001',
 /// ));
 ///
 /// SsgShell.instance.on(WebEventName.login).listen((e) => bindOneSignal(e.uid!));

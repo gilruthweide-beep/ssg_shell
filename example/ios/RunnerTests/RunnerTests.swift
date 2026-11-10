@@ -83,28 +83,36 @@ class RunnerTests: XCTestCase {
     return config
   }
 
-  func test渠道码拼到入口地址上() {
-    XCTAssertEqual(
-      config(entry: "https://im.example.com/", channel: "ch001").resolvedUrl()?.absoluteString,
-      "https://im.example.com/?channelCode=ch001"
-    )
-    XCTAssertEqual(
-      config(entry: "https://im.example.com/?a=1", channel: "ch001").resolvedUrl()?.absoluteString,
-      "https://im.example.com/?a=1&channelCode=ch001"
-    )
+  func test不带渠道码时不从旧配置补参() {
+    for url in ["https://im.example.com/", "https://im.example.com/?a=1#home"] {
+      XCTAssertEqual(config(entry: url, channel: "ChannelCode_google").resolvedUrl()?.absoluteString, url)
+    }
   }
 
-  func test参数名大小写不敏感不重复追加() {
-    let url = "https://im.example.com/?ChannelCode=fromWeb"
-
-    XCTAssertEqual(config(entry: url, channel: "ch001").resolvedUrl()?.absoluteString, url)
+  func test渠道参数大小写和空值原样保留() {
+    for name in ["channelcode", "channelCode", "ChannelCode", "CHANNELCODE"] {
+      for value in ["fromWeb", ""] {
+        let url = "https://im.example.com/?\(name)=\(value)"
+        XCTAssertEqual(config(entry: url, channel: "ChannelCode_google").resolvedUrl()?.absoluteString, url)
+      }
+    }
   }
 
-  func test渠道码为空时原样返回() {
-    XCTAssertEqual(
-      config(entry: "https://im.example.com/", channel: "").resolvedUrl()?.absoluteString,
-      "https://im.example.com/"
-    )
+  func test编码重复参数和fragment原样保留() {
+    let url = "https://im.example.com/?channelcode=ch%2f001&tag=a+%20b"
+      + "&tag=%2526&channelcode=second#/chat?channelcode=fragment"
+    for channel in ["", "ChannelCode_google"] {
+      XCTAssertEqual(config(entry: url, channel: channel).resolvedUrl()?.absoluteString, url)
+    }
+  }
+
+  func testfragment里的渠道码不会被补到query() {
+    let url = "https://im.example.com/?redirect=%2fchat#/home?channelcode=fragment"
+    XCTAssertEqual(config(entry: url, channel: "ChannelCode_google").resolvedUrl()?.absoluteString, url)
+  }
+
+  func test入口为空时不构造URL() {
+    XCTAssertNil(config(entry: "", channel: "ch001").resolvedUrl())
   }
 
   func test入口host用于外链放行() {

@@ -38,6 +38,28 @@ void main() {
     });
   });
 
+  group('§2.1 完整落地 URL 原样传给原生', () {
+    test('保留参数大小写、编码、重复参数和 fragment', () {
+      const String url = 'https://im.example.com/?ChannelCode=from%2Fweb'
+          '&tag=a+%20b&tag=%2526#/chat?channelcode=fragment';
+      const ShellConfig config = ShellConfig(entryUrl: url);
+
+      expect(config.toDto().entryUrl, url);
+      expect(config.toDto().channelCode, isEmpty);
+    });
+
+    test('旧版 channelCode 入参不再下发，URL 不带渠道码也有效', () {
+      const ShellConfig config = ShellConfig(
+        entryUrl: 'https://im.example.com/?a=1#home',
+        // ignore: deprecated_member_use_from_same_package
+        channelCode: 'ChannelCode_google',
+      );
+
+      expect(config.toDto().entryUrl, 'https://im.example.com/?a=1#home');
+      expect(config.toDto().channelCode, isEmpty);
+    });
+  });
+
   group('§8.1 HTTPS 自检', () {
     test('https 通过', () {
       expect(const ShellConfig(entryUrl: 'https://im.example.com/').isSecureEntry, isTrue);
@@ -55,10 +77,12 @@ void main() {
 
   test('copyWith 只改指定字段', () {
     const ShellConfig base = ShellConfig(entryUrl: 'https://a.example.com/');
-    final ShellConfig next = base.copyWith(channelCode: 'ch009', bSideEnabled: false);
+    final ShellConfig next = base.copyWith(
+      entryUrl: 'https://a.example.com/?channelcode=ch009',
+      bSideEnabled: false,
+    );
 
-    expect(next.entryUrl, base.entryUrl);
-    expect(next.channelCode, 'ch009');
+    expect(next.entryUrl, 'https://a.example.com/?channelcode=ch009');
     expect(next.bSideEnabled, isFalse);
     expect(next.heartbeatInterval, base.heartbeatInterval);
   });
