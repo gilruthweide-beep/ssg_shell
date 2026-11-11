@@ -85,6 +85,11 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandler, WKScriptMessa
   }
 
   private func handleFilePick(_ body: Any?) {
+    // §7.3.4 The page could not assemble some of the files native already read.
+    if let dict = body as? [String: Any], let failed = (dict["deliveryFailed"] as? NSNumber)?.intValue, failed > 0 {
+      filePicker.reportDeliveryFailure(count: failed)
+      return
+    }
     guard let dict = body as? [String: Any],
           let requestId = dict["requestId"] as? String
     else {

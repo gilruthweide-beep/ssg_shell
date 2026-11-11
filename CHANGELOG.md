@@ -2,6 +2,8 @@
 
 - Android：提前结束的 `ImActivity`（B 面关闭时转去 A 面的那个）如果晚于新开的 `ImActivity` 才被系统销毁，不再把挂在新容器上的共享 WebView 摘走。之前宿主在同一次启动里把 B 面由关转开时，IM 会一直白屏。`detachContext()` 也只在 WebView 的 context 仍指向被销毁的 Activity 时才还原。
 - Android：`onCreateWindow` 的临时探测 WebView 处理 `onRenderProcessGone`。所有 WebView 共用一个渲染进程，看门狗结束渲染进程（§11.2.3）时它若还活着，默认返回 false 会带崩整个 App。
+- iOS §7.3.4：页面侧拼装某个文件失败时，不再整批静默丢弃。其余文件照常派发 `input` / `change`，失败的个数由原生弹窗告诉用户。
+- iOS §11.2.6：重建 WebView 后补一条原生日志。
 - 并入宿主 App 验证过的本地补丁：
   - **崩溃修复**：Android `Watchdog` 的带 token 延迟投递改用 `HandlerCompat.postDelayed`。原来的私有扩展函数被 `Handler` 的同名成员方法遮蔽，实际调用的是 API 28 才有的重载，Android 6.0–8.1（minSdk 23）一打开 IM 就抛 `NoSuchMethodError`。
   - §5.2：启动期补发的身份改为保留最近一次 login **或 logout**（`stickyIdentity`）。Dart 上线前发生的登出也会补调 `OneSignal.logout()`，换号后不再收到上一个账号的推送。Android 上 uid 为空的 login 不算登录，也不解锁通知权限申请。

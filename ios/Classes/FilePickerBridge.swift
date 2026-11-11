@@ -312,6 +312,12 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
     }
   }
 
+  /// §7.3.4 Files that were read but could not be handed to the page are reported, never dropped silently.
+  func reportDeliveryFailure(count: Int) {
+    NSLog("[SsgShell] \(count) selected file(s) could not be delivered to the page")
+    warn("\(count) file(s) could not be added. Try again or choose a different file.")
+  }
+
   // ----------------------------------------------------------------- Utilities
 
   private func warn(_ message: String) {

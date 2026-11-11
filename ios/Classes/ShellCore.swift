@@ -313,6 +313,8 @@ final class ShellCore {
       self.gate.onPageLoadStarted()
       ImWebViewHolder.shared.recreate(config: self.config)
       self.watchdog.onWebViewRecreated()
+      // §11.2.6 Log both sides of a recovery; the watchdog logs the decision, this logs the result.
+      NSLog("[SsgShell] WebView instance recreated; loading the entry URL")
       self.emit(.webViewRecreated, "WebView instance recreated", [:])
     }
   }

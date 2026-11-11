@@ -244,25 +244,32 @@ enum ShellInjection {
         delete pending[requestId];
         if (!input || !files || !files.length) { return; }
         var built = [];
+        var failed = 0;
         var i = 0;
         function step() {
           if (i >= files.length) {
-            var dt = new DataTransfer();
-            built.forEach(function (f) { dt.items.add(f); });
-            input.files = dt.files;
-            // §7.3.4 The Web application uses these two events to read files; no page changes are required.
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
+            if (built.length) {
+              var dt = new DataTransfer();
+              built.forEach(function (f) { dt.items.add(f); });
+              input.files = dt.files;
+              // §7.3.4 The Web application uses these two events to read files; no page changes are required.
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            // §7.3.4 Never drop a selected file silently: native tells the user how many could not be added.
+            if (failed) { post('__PICK__', { deliveryFailed: failed }); }
             return;
           }
           assemble(files[i]).then(function (file) {
             built.push(file);
+          }, function (e) {
+            failed += 1;
+            if (window.console && console.error) {
+              console.error('[ssg_shell] Unable to deliver a selected file', e);
+            }
+          }).then(function () {
             i += 1;
             step();
-          }).catch(function (e) {
-            if (window.console && console.error) {
-              console.error('[ssg_shell] Unable to deliver selected files', e);
-            }
           });
         }
         step();
