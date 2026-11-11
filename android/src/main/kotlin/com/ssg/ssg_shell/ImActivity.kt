@@ -2,10 +2,14 @@ package com.ssg.ssg_shell
 
 import android.Manifest
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -13,7 +17,9 @@ import android.os.SystemClock
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
@@ -22,7 +28,9 @@ import android.webkit.WebView
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.core.app.ActivityCompat
@@ -48,6 +56,12 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
     private lateinit var container: FrameLayout
 
     private val main = Handler(Looper.getMainLooper())
+
+    /** §11.6 Hidden diagnostics entry: a still three-finger hold. */
+    private val diagnosticsGesture by lazy {
+        DiagnosticsGesture(slopPx = ViewConfiguration.get(this).scaledTouchSlop * 2f)
+    }
+    private val diagnosticsHold = Runnable { if (diagnosticsGesture.onHoldElapsed()) showDiagnostics() }
 
     /** §9.6 Keep the splash until eventWebReady or the maximum duration. */
     private var splashUp = true
@@ -173,6 +187,73 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
      * Below the §8.1 minimum (92), show a dismissible prompt **once** without blocking startup.
      * Keep page loading active and avoid repeated prompts.
      */
+    /** §11.6 Observe touches for the hidden diagnostics entry without consuming any of them. */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        val action = when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> {
+                // On POINTER_UP the lifted pointer is still reported; leave it out.
+                val lifted = if (ev.actionMasked == MotionEvent.ACTION_POINTER_UP) ev.actionIndex else -1
+                val indices = (0 until ev.pointerCount).filter { it != lifted }
+                diagnosticsGesture.onPointersChanged(
+                    FloatArray(indices.size) { ev.getX(indices[it]) },
+                    FloatArray(indices.size) { ev.getY(indices[it]) },
+                )
+            }
+            MotionEvent.ACTION_MOVE -> diagnosticsGesture.onMove(
+                FloatArray(ev.pointerCount) { ev.getX(it) },
+                FloatArray(ev.pointerCount) { ev.getY(it) },
+            )
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> diagnosticsGesture.onEnd()
+            else -> DiagnosticsGesture.Action.None
+        }
+        when (action) {
+            DiagnosticsGesture.Action.Arm -> {
+                main.removeCallbacks(diagnosticsHold)
+                main.postDelayed(diagnosticsHold, DiagnosticsGesture.HOLD_MS)
+            }
+            DiagnosticsGesture.Action.Disarm -> main.removeCallbacks(diagnosticsHold)
+            DiagnosticsGesture.Action.None -> Unit
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    /** §11.6 Show and export URL, UA, engine version, `__SSG_SHELL__`, last reload and recent console lines. */
+    private fun showDiagnostics() {
+        if (isFinishing || isDestroyed) return
+        val text = ShellCore.exportDiagnostics()
+        Log.i(TAG, "Diagnostics opened from the hidden entry (§11.6)")
+        val padding = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 16f, resources.displayMetrics).toInt()
+        val body = TextView(this).apply {
+            setText(text)
+            setTextIsSelectable(true)
+            typeface = Typeface.MONOSPACE
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(padding, padding, padding, padding)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.ssg_shell_diagnostics_title)
+            .setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton(R.string.ssg_shell_diagnostics_share) { _, _ -> shareDiagnostics(text) }
+            .setNeutralButton(R.string.ssg_shell_diagnostics_copy) { _, _ -> copyDiagnostics(text) }
+            .setNegativeButton(R.string.ssg_shell_diagnostics_close, null)
+            .show()
+    }
+
+    private fun copyDiagnostics(text: String) {
+        val clipboard = getSystemService(ClipboardManager::class.java) ?: return
+        clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.ssg_shell_diagnostics_title), text))
+        // Android 13+ shows its own clipboard confirmation.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            Toast.makeText(this, R.string.ssg_shell_diagnostics_copied, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun shareDiagnostics(text: String) {
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+        runCatching { startActivity(Intent.createChooser(send, getString(R.string.ssg_shell_diagnostics_title))) }
+            .onFailure { Log.w(TAG, "No application can share the diagnostics", it) }
+    }
+
     private fun maybeWarnOutdatedKernel() {
         if (ShellConfig.kernelWarned(this)) return
         val info = ShellCore.kernelInfo()
@@ -228,6 +309,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         if (current === this) current = null
         splashTimeoutTask?.let { main.removeCallbacks(it) }
         splashTimeoutTask = null
+        main.removeCallbacks(diagnosticsHold)
         if (ImWebViewHolder.host === this) ImWebViewHolder.host = null
         picker?.dispose()
         picker = null

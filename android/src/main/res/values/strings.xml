@@ -17,4 +17,10 @@
     <!-- Shared by the Settings guidance dialogs. -->
     <string name="ssg_shell_open_settings">Open settings</string>
     <string name="ssg_shell_cancel">Cancel</string>
+    <!-- §11.6 Hidden diagnostics entry: hold three fingers on the IM screen for two seconds. -->
+    <string name="ssg_shell_diagnostics_title">Diagnostics</string>
+    <string name="ssg_shell_diagnostics_copy">Copy</string>
+    <string name="ssg_shell_diagnostics_share">Share</string>
+    <string name="ssg_shell_diagnostics_close">Close</string>
+    <string name="ssg_shell_diagnostics_copied">Copied</string>
 </resources>

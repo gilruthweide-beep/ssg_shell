@@ -1,5 +1,6 @@
 ## Unreleased
 
+- §11.6：插件自带隐藏诊断入口。在 IM 界面三指按住 2 秒（Android `DiagnosticsGesture`，iOS 三指 `UILongPressGestureRecognizer`）弹出 `exportDiagnostics()` 的内容，可复制或分享；只观察触摸，不拦截网页的任何手势。
 - Android：提前结束的 `ImActivity`（B 面关闭时转去 A 面的那个）如果晚于新开的 `ImActivity` 才被系统销毁，不再把挂在新容器上的共享 WebView 摘走。之前宿主在同一次启动里把 B 面由关转开时，IM 会一直白屏。`detachContext()` 也只在 WebView 的 context 仍指向被销毁的 Activity 时才还原。
 - Android：`onCreateWindow` 的临时探测 WebView 处理 `onRenderProcessGone`。所有 WebView 共用一个渲染进程，看门狗结束渲染进程（§11.2.3）时它若还活着，默认返回 false 会带崩整个 App。
 - iOS §7.3.4：页面侧拼装某个文件失败时，不再整批静默丢弃。其余文件照常派发 `input` / `change`，失败的个数由原生弹窗告诉用户。

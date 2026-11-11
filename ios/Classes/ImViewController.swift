@@ -50,6 +50,7 @@ final class ImViewController: UIViewController, ShellWebViewHost {
     }
     // If the initial page failed to load during preload, there was no container then; show the retry page now.
     ShellCore.shared.onHostAttached(self)
+    installDiagnosticsGesture()
 
     if config.entryUrl.isEmpty {
       showErrorPage("Landing URL is not configured (§2.1)")
@@ -279,5 +280,48 @@ final class ImViewController: UIViewController, ShellWebViewHost {
   func onWebViewReplaced(_ webView: WKWebView) {
     hideErrorPage()
     attach(webView)
+  }
+}
+
+// MARK: - §11.6 Hidden diagnostics entry
+
+extension ImViewController: UIGestureRecognizerDelegate {
+  /// Hold three fingers on the IM screen for two seconds. The recognizer never cancels the page's touches.
+  fileprivate func installDiagnosticsGesture() {
+    let hold = UILongPressGestureRecognizer(target: self, action: #selector(diagnosticsHold(_:)))
+    hold.numberOfTouchesRequired = 3
+    hold.minimumPressDuration = 2
+    hold.cancelsTouchesInView = false
+    hold.delegate = self
+    view.addGestureRecognizer(hold)
+  }
+
+  func gestureRecognizer(
+    _ gestureRecognizer: UIGestureRecognizer,
+    shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+  ) -> Bool {
+    true
+  }
+
+  @objc private func diagnosticsHold(_ recognizer: UILongPressGestureRecognizer) {
+    guard recognizer.state == .began, presentedViewController == nil, view.window != nil else { return }
+    // URL, UA, engine version, __SSG_SHELL__, last reload and recent console lines.
+    let text = ShellCore.shared.exportDiagnostics()
+    NSLog("[SsgShell] Diagnostics opened from the hidden entry (§11.6)")
+    let alert = UIAlertController(title: "Diagnostics", message: text, preferredStyle: .alert)
+    alert.addAction(UIAlertAction(title: "Copy", style: .default) { _ in
+      UIPasteboard.general.string = text
+    })
+    alert.addAction(UIAlertAction(title: "Share", style: .default) { [weak self] _ in
+      guard let self else { return }
+      let share = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+      // iPad presents the share sheet as a popover.
+      share.popoverPresentationController?.sourceView = self.view
+      share.popoverPresentationController?.sourceRect = CGRect(
+        x: self.view.bounds.midX, y: self.view.bounds.midY, width: 0, height: 0)
+      self.present(share, animated: true)
+    })
+    alert.addAction(UIAlertAction(title: "Close", style: .cancel))
+    present(alert, animated: true)
   }
 }

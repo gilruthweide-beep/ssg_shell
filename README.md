@@ -20,13 +20,13 @@ App = 原生壳 + WebView 加载 IM Web。业务逻辑、UI、长连接、消息
 | §8 | 运行环境、不清存储、原生 View 承载 | `ImWebViewHolder` / `ImActivity` / `ImViewController` |
 | §9 | 返回键、键盘、安全区、启动无多余加载 | `ImActivity` / `ImViewController` |
 | §10 | 回前台信号、不冻结定时器、单实例、长活 | `ShellCore` / `ImWebViewHolder` |
-| §11 | 原生心跳、存活监测与兜底 reload、推送捅醒、内存告警、诊断导出 | `Watchdog` / `ShellCore` / `ConsoleLogBuffer` |
+| §11 | 原生心跳、存活监测与兜底 reload、推送捅醒、内存告警、诊断导出与隐藏入口 | `Watchdog` / `ShellCore` / `ConsoleLogBuffer` / `DiagnosticsGesture` |
 
 **宿主要自己做的**：
 
 - OneSignal SDK 集成与绑定（§5.1 分工里「原生」那一列的 SDK 部分），以及把它的两个回调接到 `handlePushReceived` / `handlePushOpened` 上。插件只告诉你「这条要不要展示」，真正拦下通知要在 OneSignal 的前台回调里 `preventDefault()`。
 - §13 的应用名称和包名规则（两端包名必须不同，名称只能用那 18 个字母和汉字）。
-- §11.6 的隐藏入口 UI（连点若干次之类）。插件提供 `getDiagnostics()` 和 `exportDiagnostics()`，入口放在哪是宿主的设置页的事。
+- §11.6 的隐藏入口插件已经自带：在 IM 界面三指按住 2 秒，弹出诊断信息，可复制或分享（Android 文案在 `ssg_shell_diagnostics_*` 字符串资源里，可覆盖）。宿主想在设置页再放一个入口时，用 `getDiagnostics()` / `exportDiagnostics()`。
 - iOS 上 §6.2 通知权限被拒绝后的二次引导；插件提供 `openSystemSettings()`。Android 这一半插件自己做了：登录后通知仍未开启（拒绝了系统弹窗、已永久拒绝、API 33 以下或应用通知总开关被关）时，每个进程最多一次在 `ImActivity` 上弹「Notifications are off」引导去设置，A 面不弹。麦克风两端插件都自己做了：拒绝后再点语音会弹「去设置」的原生提示。提示默认是英文，Android 文案在 `ssg_shell_mic_denied*`、`ssg_shell_notification_off_*`、`ssg_shell_open_settings`、`ssg_shell_cancel` 字符串资源里，宿主可以覆盖或加本地化。
 
 ## 接入
