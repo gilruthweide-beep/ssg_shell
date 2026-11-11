@@ -14,7 +14,7 @@ class RecoveryBackoffTest {
     @Test
     fun `第一次卡死立刻处理`() {
         assertEquals(Decision.Recover(attempt = 1, backoffMs = 180_000), backoff.onStall(0))
-        assertTrue(backoff.recovering)
+        assertTrue(backoff.awaitingAlive)
     }
 
     @Test
@@ -46,18 +46,33 @@ class RecoveryBackoffTest {
         )
     }
 
+    /** §12.4 的验收流程：重建后的页面先发了 alive，随后又被卡死。 */
     @Test
-    fun `页面恢复后退避清零 下一次卡死按第一次算`() {
+    fun `重建后页面发过 alive 又卡死 仍然要等满退避窗口`() {
         backoff.onStall(0)
-        backoff.onStall(180_000)
 
-        assertTrue(backoff.onRecovered())
-        assertFalse(backoff.recovering)
-        assertEquals(Decision.Recover(attempt = 1, backoffMs = 180_000), backoff.onStall(200_000))
+        assertTrue(backoff.onAlive(5_000))
+        assertFalse(backoff.awaitingAlive)
+
+        assertEquals(Decision.Throttled(waitMs = 110_000, firstReport = true), backoff.onStall(70_000))
+        assertEquals(Decision.Recover(attempt = 2, backoffMs = 600_000), backoff.onStall(180_000))
     }
 
     @Test
-    fun `没在恢复当中时 onRecovered 返回 false`() {
-        assertFalse(backoff.onRecovered())
+    fun `页面撑过整个窗口后还活着 下一次卡死按第一次算`() {
+        backoff.onStall(0)
+        backoff.onAlive(5_000)
+        backoff.onAlive(180_000)
+
+        assertEquals(Decision.Recover(attempt = 1, backoffMs = 180_000), backoff.onStall(250_000))
+    }
+
+    @Test
+    fun `没在等恢复时 onAlive 返回 false`() {
+        assertFalse(backoff.onAlive(0))
+
+        backoff.onStall(1_000)
+        assertTrue(backoff.onAlive(2_000))
+        assertFalse(backoff.onAlive(17_000))
     }
 }

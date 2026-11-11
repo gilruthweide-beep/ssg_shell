@@ -3,8 +3,13 @@ package com.ssg.ssg_shell
 /**
  * §11.2.5 同一次卡死只处理一次；连续失败要退避：第一次处理后等 180 秒，之后 600 秒。
  *
- * 「页面恢复」的判据是又收到了 `eventWebAlive`。reload / 重建之后一直收不到属于连续失败：
- * 退避窗口到期后要再处理一次，而不是把这次卡死永久锁住 —— §12.4「退避」验的就是这条。
+ * 规则：
+ * - 处理过一次之后，退避窗口到期之前不再处理 —— **不管这期间页面有没有发过
+ *   `eventWebAlive`**。重建出来的页面一加载就会发一条 alive；拿它当「已恢复」把退避清零
+ *   的话，重建后很快又卡死的页面每分钟都会被 reload 一次，§12.4「退避」也就验不过。
+ * - 窗口到期时页面还卡着（或者又卡了），再处理一次，窗口换成 600 秒。一直收不到 alive
+ *   也一样会再处理，不会把这次卡死永久锁住。
+ * - 页面撑过了整个窗口、之后还在发 alive，才算真正恢复：计数清零，下一次卡死按第一次算。
  *
  * 纯逻辑，不碰定时器，时间由调用方传进来。
  */
@@ -21,15 +26,16 @@ internal class RecoveryBackoff(
         data class Throttled(val waitMs: Long, val firstReport: Boolean) : Decision
     }
 
-    /** 自上次页面恢复以来处理过几次。 */
+    /** 连续处理了几次。页面撑过一个完整的退避窗口后清零。 */
     var attempts = 0
+        private set
+
+    /** 处理过、之后还一条 `eventWebAlive` 都没收到。 */
+    var awaitingAlive = false
         private set
 
     private var nextAllowedAtMs = 0L
     private var throttleReported = false
-
-    /** 已经处理过、但页面还没恢复。 */
-    val recovering: Boolean get() = attempts > 0
 
     fun onStall(nowMs: Long): Decision {
         if (nowMs < nextAllowedAtMs) {
@@ -41,15 +47,19 @@ internal class RecoveryBackoff(
         val backoff = if (attempts <= 1) firstBackoffMs() else laterBackoffMs()
         nextAllowedAtMs = nowMs + backoff
         throttleReported = false
+        awaitingAlive = true
         return Decision.Recover(attempts, backoff)
     }
 
-    /** 收到 `eventWebAlive`：页面恢复，退避清零。返回之前是否处在恢复当中。 */
-    fun onRecovered(): Boolean {
-        val wasRecovering = attempts > 0
-        attempts = 0
-        nextAllowedAtMs = 0
-        throttleReported = false
-        return wasRecovering
+    /** 收到 `eventWebAlive`。返回这是不是处理之后收到的第一条。 */
+    fun onAlive(nowMs: Long): Boolean {
+        val firstSinceRecovery = awaitingAlive
+        awaitingAlive = false
+        if (attempts > 0 && nowMs >= nextAllowedAtMs) {
+            attempts = 0
+            nextAllowedAtMs = 0
+            throttleReported = false
+        }
+        return firstSinceRecovery
     }
 }

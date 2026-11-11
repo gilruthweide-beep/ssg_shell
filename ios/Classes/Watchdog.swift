@@ -106,9 +106,10 @@ final class Watchdog {
   func onWebAlive() {
     firstAliveSeen = true
     lastAliveAt = Date().timeIntervalSince1970
-    guard backoff.onRecovered() else { return }
-    // 页面恢复了，退避清零，下一次卡死按第一次算。
-    NSLog("[SsgShell] 页面已恢复（收到 eventWebAlive），退避清零")
+    guard backoff.onAlive(now: lastAliveAt) else { return }
+    // 处理之后页面第一次重新发来 alive。退避窗口照旧：这条多半是新页面刚加载时发的，
+    // 撑过整个窗口才算真正恢复（见 RecoveryBackoff）。
+    NSLog("[SsgShell] 处理之后页面重新发来 eventWebAlive")
     awaitingPageStart = false
     reloadConfirm?.cancel()
     reloadConfirm = nil
@@ -116,9 +117,9 @@ final class Watchdog {
 
   private func checkAlive() {
     // §11.2.0 收到第一条之前永远不判定卡死，否则原生先上线、Web 还没发，
-    // 会每 60 秒 reload 一次。例外：已经在处理一次卡死（重建会把 firstAliveSeen 清掉），
-    // 这时页面发过 alive、只是还没恢复，要继续盯着，由退避窗口防止循环。
-    guard firstAliveSeen || backoff.recovering else { return }
+    // 会每 60 秒 reload 一次。例外：处理过一次卡死、之后还没等到 alive（重建会把
+    // firstAliveSeen 清掉）。这个页面本来是发 alive 的，要继续盯着，由退避窗口防止循环。
+    guard firstAliveSeen || backoff.awaitingAlive else { return }
     // reload 刚发出去，这 10 秒归 reloadConfirm 管。
     guard !awaitingPageStart else { return }
     let silence = Date().timeIntervalSince1970 - lastAliveAt

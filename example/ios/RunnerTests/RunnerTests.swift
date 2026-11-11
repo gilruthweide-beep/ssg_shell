@@ -277,7 +277,7 @@ class RunnerTests: XCTestCase {
     var backoff = makeBackoff()
 
     XCTAssertEqual(backoff.onStall(now: 0), .recover(attempt: 1, backoff: 180))
-    XCTAssertTrue(backoff.recovering)
+    XCTAssertTrue(backoff.awaitingAlive)
   }
 
   /// §12.4「退避」：让页面持续卡死，第一次处理后隔 180 秒再处理，之后隔 600 秒。
@@ -300,14 +300,34 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(backoff.onStall(now: 10), .throttled(wait: 170, firstReport: false))
   }
 
-  func test页面恢复后退避清零下一次卡死按第一次算() {
+  /// §12.4 的验收流程：重建后的页面先发了 alive，随后又被卡死。
+  func test重建后页面发过alive又卡死仍然要等满退避窗口() {
     var backoff = makeBackoff()
     _ = backoff.onStall(now: 0)
-    _ = backoff.onStall(now: 180)
 
-    XCTAssertTrue(backoff.onRecovered())
-    XCTAssertFalse(backoff.recovering)
-    XCTAssertEqual(backoff.onStall(now: 200), .recover(attempt: 1, backoff: 180))
+    XCTAssertTrue(backoff.onAlive(now: 5))
+    XCTAssertFalse(backoff.awaitingAlive)
+
+    XCTAssertEqual(backoff.onStall(now: 70), .throttled(wait: 110, firstReport: true))
+    XCTAssertEqual(backoff.onStall(now: 180), .recover(attempt: 2, backoff: 600))
+  }
+
+  func test页面撑过整个窗口后还活着下一次卡死按第一次算() {
+    var backoff = makeBackoff()
+    _ = backoff.onStall(now: 0)
+    backoff.onAlive(now: 5)
+    backoff.onAlive(now: 180)
+
+    XCTAssertEqual(backoff.onStall(now: 250), .recover(attempt: 1, backoff: 180))
+  }
+
+  func test没在等恢复时onAlive返回false() {
+    var backoff = makeBackoff()
+    XCTAssertFalse(backoff.onAlive(now: 0))
+
+    _ = backoff.onStall(now: 1)
+    XCTAssertTrue(backoff.onAlive(now: 2))
+    XCTAssertFalse(backoff.onAlive(now: 17))
   }
 
   // -------------------------------------------------------- §11.6 console

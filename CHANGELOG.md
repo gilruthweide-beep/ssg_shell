@@ -4,7 +4,7 @@
 - 废弃并忽略 Dart 的 `channelCode` 配置，保留旧入参和 Pigeon 消息格式兼容；渠道码迁入 `entryUrl`。
 - 诊断渠道码改为记录 Web 归因事件的实际值；同步示例、原生冷启动配置和渠道归因验收说明。
 - 修复 §9.6：WebView 预加载完、`eventWebReady` 已经发过之后再打开容器（或关掉重开、Android 回收后重建），splash 不再干等 30 秒上限；预加载阶段的首屏加载失败会在容器挂上时补出重试页。
-- 修复 §11.2.5：reload / 重建之后页面仍然卡死时，退避窗口到期会再处理（180 秒，之后 600 秒），不再永久锁死；退避期间的 `stallDetected` / `recoveryThrottled` 每个窗口只报一次。
+- 修复 §11.2.5：reload / 重建之后页面仍然卡死时，退避窗口到期会再处理（180 秒，之后 600 秒），不再永久锁死；退避期间的 `stallDetected` / `recoveryThrottled` 每个窗口只报一次。重建后的页面刚加载时发的那条 `eventWebAlive` 不再把退避清零，页面撑过整个窗口才算恢复。
 - Android：`ImActivity` 当冷启动第一个 Activity 且没有引擎时，自动起一个无界面引擎跑 Dart（`SsgShellPlugin.ENGINE_ID`）；多个引擎同时挂着插件时都能收到事件。插件 Manifest 不再写死 `ImActivity` 的 `android:exported`，README 的 LAUNCHER 片段可以直接合并。
 - Dart 上线前错过的 `webReady` / `login` / `unreadCount` / `chatOpen` 在第一次 `initialize()` 时补发。
 - **行为变更**：`ShellConfig.bSideEnabled` 改为可空，不传时沿用已落盘的开关（从没设过为关），不再默认 true 并覆盖 `setBSideEnabled()` 的结果。
