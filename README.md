@@ -27,7 +27,7 @@ App = 原生壳 + WebView 加载 IM Web。业务逻辑、UI、长连接、消息
 - OneSignal SDK 集成与绑定（§5.1 分工里「原生」那一列的 SDK 部分），以及把它的两个回调接到 `handlePushReceived` / `handlePushOpened` 上。插件只告诉你「这条要不要展示」，真正拦下通知要在 OneSignal 的前台回调里 `preventDefault()`。
 - §13 的应用名称和包名规则（两端包名必须不同，名称只能用那 18 个字母和汉字）。
 - §11.6 的隐藏入口 UI（连点若干次之类）。插件提供 `getDiagnostics()` 和 `exportDiagnostics()`，入口放在哪是宿主的设置页的事。
-- §6.2 被永久拒绝后的二次引导文案；插件提供 `openSystemSettings()`。
+- §6.2 通知权限被永久拒绝后的二次引导；插件提供 `openSystemSettings()`。麦克风那一半插件自己做了：已经永久拒绝后再点语音，会弹一个「去设置」的原生提示（Android 文案在 `ssg_shell_mic_denied` 等字符串资源里，可覆盖）。
 
 ## 接入
 
@@ -62,6 +62,10 @@ await SsgShell.instance.handlePushOpened(data);
 
 `ShellConfig` 的默认值就是规范值（心跳 20s、判定卡死 60s、退避 180s/600s、splash 上限 30s…），一般不用改。
 
+**B 面开关**：`ShellConfig.bSideEnabled` 不传时沿用已经落盘的值，从没设过就是关。开关用 `setBSideEnabled()` 设，每次启动照常调 `initialize()` 不会把它冲掉；想在 `initialize` 里一并指定就显式传 true / false。B 面关着时 `preload()` 是空操作，Android 的 `ImActivity` 会转去 A 面。
+
+**监听要早挂**：原生预加载时，Web 可能在 Dart 上线之前就发过 `login` / `webReady` / `unreadCount` / `chatOpen`。这几条会在第一次 `initialize()` 时补发，并在它返回之后才进事件流。所以监听要么在 `initialize()` 之前挂好，要么像上面那样紧跟在 `await` 后面挂，中间不要再隔别的 `await`。
+
 §2.1 的渠道码是可选的。需要归因时，把真实渠道码放进完整落地 URL；不需要时可以直接用
 `https://im.example.com/`。壳原样加载 URL，保留参数大小写、编码、重复参数和 fragment，
 不补参、不删参、不用编译期常量覆盖；渠道码的读取和存储由 Web 负责。
@@ -83,7 +87,7 @@ Android 的 `com.ssg.shell.CHANNEL_CODE` 和 iOS 的 `SSGShellChannelCode` 也�
 
 **为什么要 meta-data**：§9.6 要求 B 面开启时冷启动直接加载 Web，那一刻 Flutter 引擎还没起来，拿不到 Dart 的配置。插件把配置落盘，下次冷启动按缓存走（`AUTO_PRELOAD` 打开时在 `Application.onCreate` 那一刻就建 WebView 并开始加载）。
 
-想让 `ImActivity` 当冷启动第一个 Activity（§8.4 体验与性能 2），在宿主 Manifest 里 merge 一个 intent-filter：
+想让 `ImActivity` 当冷启动第一个 Activity（§8.4 体验与性能 2），在宿主 Manifest 里 merge 一个 intent-filter（`<manifest>` 上要有 `xmlns:tools`），同时把原来 FlutterActivity 上的 LAUNCHER 去掉，不然桌面上会有两个图标：
 
 ```xml
 <activity android:name="com.ssg.ssg_shell.ImActivity" android:exported="true" tools:node="merge">
@@ -95,6 +99,20 @@ Android 的 `com.ssg.shell.CHANNEL_CODE` 和 iOS 的 `SSGShellChannelCode` 也�
 ```
 
 B 面未开启时 `ImActivity` 会转去 `A_SIDE_ACTIVITY` 并结束自己，用户看不到中间态。
+
+**这条路径上 Dart 怎么跑起来**：`ImActivity` 不是 FlutterActivity，冷启动直接进它时没有引擎，上面接在 Dart 里的 OneSignal 绑定、通知权限、推送点击都不会执行。所以 B 面开启、又没有任何引擎挂着插件时，`ImActivity` 会自己起一个不带界面的引擎去跑宿主的 `main()`，并以 `SsgShellPlugin.ENGINE_ID`（`"ssg_shell"`）放进 `FlutterEngineCache`。两点要注意：
+
+- `main()` 会在没有界面的情况下执行，里面不要假设一定有 Activity。
+- 之后要打开 A 面的 FlutterActivity 时，覆盖 `getCachedEngineId()` 复用这个引擎，否则会再建一个、`main()` 再跑一遍（事件两边都能收到，只是白占内存）：
+
+```kotlin
+class MainActivity : FlutterActivity() {
+    override fun getCachedEngineId(): String? =
+        SsgShellPlugin.ENGINE_ID.takeIf { FlutterEngineCache.getInstance().contains(it) }
+}
+```
+
+**电池优化白名单（§10.3）**：插件不再替宿主声明 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`（§6.3 的清单里没有它，应用市场对它有专门限制）。宿主自己声明了，`requestBatteryOptimizationExemption()` 就直接弹系统确认框；没声明时打开系统的电池优化列表页，让用户自己找到应用。
 
 ### 3. iOS
 

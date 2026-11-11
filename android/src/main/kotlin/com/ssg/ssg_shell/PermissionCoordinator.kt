@@ -181,6 +181,9 @@ internal object PermissionCoordinator {
      * 所以这个方法只在 Dart 显式调用时才走，插件自己不会调。
      *
      * 系统设置页没有结果回调，只能等 App 回到前台后重新读一次状态。
+     *
+     * 直接弹系统确认框要宿主声明 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`（§6.3 的清单里
+     * 没有它，插件不替宿主声明）。没声明时退到系统的电池优化列表页，让用户自己找到应用。
      */
     fun requestBatteryOptimizationExemption(context: Context, onResult: (Boolean) -> Unit) {
         if (isBatteryOptimizationIgnored(context)) {
@@ -188,11 +191,20 @@ internal object PermissionCoordinator {
             return
         }
         val ctx = context.applicationContext
+        val canAskDirectly = ContextCompat.checkSelfPermission(
+            ctx,
+            Manifest.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
         @Suppress("BatteryLife") // 规范要求的保活能力，用途在 §10.3
-        val intent = Intent(
-            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-            Uri.fromParts("package", ctx.packageName, null),
-        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val intent = if (canAskDirectly) {
+            Intent(
+                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.fromParts("package", ctx.packageName, null),
+            )
+        } else {
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val launched = runCatching { ctx.startActivity(intent); true }
             .onFailure { Log.w(TAG, "拉起电池优化白名单页失败", it) }
             .getOrDefault(false)

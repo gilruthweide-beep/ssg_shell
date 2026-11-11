@@ -70,7 +70,12 @@ internal class ShellWebViewClient(
                 }
             }
             // tel:、mailto:、intent:、市场链接等，一律交给系统。
-            else -> ImWebViewHolder.host?.openExternal(uri.toString()) ?: false
+            // 系统里没有应用能接时也不能放给 WebView：它加载不了这些协议，主框架会报
+            // ERR_UNKNOWN_URL_SCHEME，原生重试页就盖到整个 IM 上了。
+            else -> {
+                ImWebViewHolder.host?.openExternal(uri.toString())
+                true
+            }
         }
     }
 

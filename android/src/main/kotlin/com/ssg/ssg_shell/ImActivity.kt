@@ -67,6 +67,9 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
     /** §7.1 `onPermissionRequest` 里挂起的那次麦克风请求。 */
     private var pendingAudio: PermissionRequest? = null
 
+    /** 向系统发起麦克风申请的时刻，用来分辨「系统没弹框就直接拒了」。 */
+    private var audioRequestedAtMs = 0L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // §9.6 必须在 super.onCreate 之前装上，否则这一帧已经用 postSplashScreenTheme 画了。
         val splash = installSplashScreen()
@@ -100,19 +103,25 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         current = this
 
         val config = ShellCore.config()
+        // eventWebReady 每次页面加载只发一次。WebView 是预加载的、或者这个 Activity 是
+        // 被系统回收后重建的，那一条早就发过了，不会再来 —— 这时还撑着 splash 就只能
+        // 干等到上限。
+        splashUp = !ShellCore.isWebReady()
         splashDeadlineAtMs = SystemClock.uptimeMillis() + config.splashTimeoutMs
         // §9.6 收到 eventWebReady 后立即撤，不要用固定时长定时器；
         // 但 eventWebReady 可能永远不来（内核过低的不兼容页、脚本加载失败的重试页），
         // 所以额外给一个上限兜底。
         splash.setKeepOnScreenCondition { splashUp && SystemClock.uptimeMillis() < splashDeadlineAtMs }
-        splashTimeoutTask = Runnable {
-            if (splashUp) {
-                splashUp = false
-                ShellCore.notifySplashDismissed(ShellEventType.SPLASH_TIMED_OUT)
-                Log.w(TAG, "splash 到达 ${config.splashTimeoutMs}ms 上限，强制撤除（§9.6）")
+        if (splashUp) {
+            splashTimeoutTask = Runnable {
+                if (splashUp) {
+                    splashUp = false
+                    ShellCore.notifySplashDismissed(ShellEventType.SPLASH_TIMED_OUT)
+                    Log.w(TAG, "splash 到达 ${config.splashTimeoutMs}ms 上限，强制撤除（§9.6）")
+                }
             }
+            main.postDelayed(splashTimeoutTask!!, config.splashTimeoutMs)
         }
-        main.postDelayed(splashTimeoutTask!!, config.splashTimeoutMs)
 
         container = FrameLayout(this).apply {
             // §8.4 体验与性能 3：背景色与首屏一致，边缘不闪黑。
@@ -138,6 +147,8 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         ImWebViewHolder.attachContext(this)
         attachWebView(ImWebViewHolder.get(this, config))
         ImWebViewHolder.host = this
+        // 预加载阶段首屏就加载失败的话，那时没有容器，重试页现在补上。
+        ShellCore.onHostAttached(this)
 
         // §9.1 返回键先回退 Web 的历史。直接 finish() 会导致用户在会话里按返回就退出整个 App。
         // 用 OnBackPressedDispatcher 注册，Android 14 以上的返回手势才有预览动画并走同一套逻辑
@@ -205,6 +216,10 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         ImWebViewHolder.attachContext(this)
         // §10.2 WebView 真的可见了：ShellCore 据此翻 visibilitychange 并调 onForeground()。
         ShellCore.setImRunning(true)
+        // §5 的推送绑定接在 Dart 上。这个 Activity 是冷启动第一个时没有引擎在跑；
+        // 宿主的 FlutterActivity 销毁后也可能一个都不剩。每次回到前台确认一遍，
+        // 排在首帧之后去起，不跟首屏抢主线程。已经有引擎时是空操作。
+        container.post { ShellCore.ensureDartEngine() }
     }
 
     override fun onStop() {
@@ -270,6 +285,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         }
         pendingAudio?.deny()
         pendingAudio = request
+        audioRequestedAtMs = SystemClock.elapsedRealtime()
         ActivityCompat.requestPermissions(
             this,
             arrayOf(Manifest.permission.RECORD_AUDIO),
@@ -308,10 +324,30 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         if (granted) {
             request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
         } else {
-            // §12.3「语音被拒后」：Web 弹提示，二次引导（去系统设置）由原生负责，
-            // 入口留给宿主，这里不自作主张弹窗打断录音流程。
             request.deny()
+            // §6.2 / §12.3「语音被拒后」：Web 弹提示，去系统设置的二次引导由原生负责。
+            // 宿主的 Flutter 界面盖不到这个 Activity 上面，所以只能在这里给。
+            // 只在「已经永久拒绝」时给：系统没弹框、几乎立刻就回了拒绝。用户刚在系统框里
+            // 点了拒绝的那一次不追着弹。
+            val answeredWithoutPrompt =
+                SystemClock.elapsedRealtime() - audioRequestedAtMs < AUTO_DENY_WINDOW_MS
+            val canAskAgain = ActivityCompat.shouldShowRequestPermissionRationale(
+                this,
+                Manifest.permission.RECORD_AUDIO,
+            )
+            if (answeredWithoutPrompt && !canAskAgain) showMicrophoneSettingsGuide()
         }
+    }
+
+    private fun showMicrophoneSettingsGuide() {
+        if (isFinishing || isDestroyed) return
+        AlertDialog.Builder(this)
+            .setMessage(R.string.ssg_shell_mic_denied)
+            .setPositiveButton(R.string.ssg_shell_open_settings) { _, _ ->
+                PermissionCoordinator.openAppSettings(this)
+            }
+            .setNegativeButton(R.string.ssg_shell_cancel, null)
+            .show()
     }
 
     /** §7.1 视频全屏。 */
@@ -466,6 +502,9 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
     internal companion object {
         private const val TAG = "SsgShell"
         private const val REQ_AUDIO = 0x55A2
+
+        /** 系统真的弹了框的话，用户不可能在这么短的时间里答完。 */
+        private const val AUTO_DENY_WINDOW_MS = 800L
         private val ID_ERROR_BODY = View.generateViewId()
 
         @Volatile

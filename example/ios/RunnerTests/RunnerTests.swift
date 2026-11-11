@@ -254,6 +254,62 @@ class RunnerTests: XCTestCase {
     )
   }
 
+  // ------------------------------------------------------- §1.3 注入自检
+
+  /// 自检读的是 `classList.contains('is-web-browser')`，结果要和 Android 一样是
+  /// "true" / "false"，不能是 "1" / "0"。
+  func testJS布尔结果转成true和false() {
+    XCTAssertEqual(ImWebViewHolder.describe(NSNumber(value: false)), "false")
+    XCTAssertEqual(ImWebViewHolder.describe(NSNumber(value: true)), "true")
+    // 数字照旧。
+    XCTAssertEqual(ImWebViewHolder.describe(NSNumber(value: 0)), "0")
+    XCTAssertEqual(ImWebViewHolder.describe(NSNumber(value: 7)), "7")
+    XCTAssertEqual(ImWebViewHolder.describe("false"), "false")
+  }
+
+  // ------------------------------------------------------ §11.2.5 退避
+
+  private func makeBackoff() -> RecoveryBackoff {
+    RecoveryBackoff(firstBackoff: { 180 }, laterBackoff: { 600 })
+  }
+
+  func test第一次卡死立刻处理() {
+    var backoff = makeBackoff()
+
+    XCTAssertEqual(backoff.onStall(now: 0), .recover(attempt: 1, backoff: 180))
+    XCTAssertTrue(backoff.recovering)
+  }
+
+  /// §12.4「退避」：让页面持续卡死，第一次处理后隔 180 秒再处理，之后隔 600 秒。
+  func test页面一直没恢复时180秒后再处理之后每600秒一次() {
+    var backoff = makeBackoff()
+    _ = backoff.onStall(now: 0)
+
+    XCTAssertEqual(backoff.onStall(now: 179), .throttled(wait: 1, firstReport: true))
+    XCTAssertEqual(backoff.onStall(now: 180), .recover(attempt: 2, backoff: 600))
+
+    XCTAssertEqual(backoff.onStall(now: 779), .throttled(wait: 1, firstReport: true))
+    XCTAssertEqual(backoff.onStall(now: 780), .recover(attempt: 3, backoff: 600))
+  }
+
+  func test退避窗口内只报告一次() {
+    var backoff = makeBackoff()
+    _ = backoff.onStall(now: 0)
+
+    XCTAssertEqual(backoff.onStall(now: 5), .throttled(wait: 175, firstReport: true))
+    XCTAssertEqual(backoff.onStall(now: 10), .throttled(wait: 170, firstReport: false))
+  }
+
+  func test页面恢复后退避清零下一次卡死按第一次算() {
+    var backoff = makeBackoff()
+    _ = backoff.onStall(now: 0)
+    _ = backoff.onStall(now: 180)
+
+    XCTAssertTrue(backoff.onRecovered())
+    XCTAssertFalse(backoff.recovering)
+    XCTAssertEqual(backoff.onStall(now: 200), .recover(attempt: 1, backoff: 180))
+  }
+
   // -------------------------------------------------------- §11.6 console
 
   func testconsole级别映射() {

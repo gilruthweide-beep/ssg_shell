@@ -60,6 +60,9 @@ final class ImWebViewHolder {
     // §2.2 WebKit 会把它**追加**在默认 UA 后面，不是整段替换。
     configuration.applicationNameForUserAgent =
       ShellInjection.applicationNameForUserAgent(shellVersion: config.shellVersion)
+    // §2.2 Web 与服务端按 UA 里的 `iPhone` / `iPad` 判平台。iPad 上 WKWebView 默认按
+    // 桌面站点请求，UA 会变成 `Macintosh`、不带 `iPad`，所以固定成移动版。
+    configuration.defaultWebpagePreferences.preferredContentMode = .mobile
 
     let controller = configuration.userContentController
     // §1.2 必须在页面任何脚本执行之前完成注入：Web 侧有一组常量在模块加载那一刻求值。
@@ -275,7 +278,14 @@ final class ImWebViewHolder {
     switch value {
     case .none, is NSNull: return ""
     case let text as String: return text
-    case let number as NSNumber: return number.stringValue
+    case let number as NSNumber:
+      // JS 的 true / false 过线后是布尔型的 NSNumber，stringValue 会给出 "1" / "0"。
+      // Android 的 evaluateJavascript 给的是 "true" / "false"，两端要一致 ——
+      // §1.3 的注入自检就是拿这个串和 "false" 比，不处理的话 iOS 上永远报未生效。
+      if CFGetTypeID(number) == CFBooleanGetTypeID() {
+        return number.boolValue ? "true" : "false"
+      }
+      return number.stringValue
     default:
       if let value,
          let data = try? JSONSerialization.data(

@@ -25,10 +25,8 @@ final class Watchdog {
   private var firstAliveSeen = false
   private var lastAliveAt: TimeInterval = 0
 
-  /// §11.2.5 同一次卡死只处理一次，页面恢复后才允许下一次。
-  private var recoveryInProgress = false
-  private var recoveryAttempts = 0
-  private var nextRecoveryAllowedAt: TimeInterval = 0
+  /// §11.2.5 同一次卡死只处理一次；页面没恢复就按 180 秒 / 600 秒退避着再处理。
+  private var backoff: RecoveryBackoff
 
   /// reload 之后有没有真的开始加载（§11.2.3）。
   private var awaitingPageStart = false
@@ -52,6 +50,10 @@ final class Watchdog {
     self.reload = reload
     self.recreate = recreate
     self.emit = emit
+    self.backoff = RecoveryBackoff(
+      firstBackoff: { config().recoveryBackoffFirst },
+      laterBackoff: { config().recoveryBackoffLater }
+    )
   }
 
   var lastAliveAtMs: Int64? {
@@ -104,12 +106,9 @@ final class Watchdog {
   func onWebAlive() {
     firstAliveSeen = true
     lastAliveAt = Date().timeIntervalSince1970
-    guard recoveryInProgress else { return }
-    // 页面恢复了，解除「同一次卡死」的锁并清掉退避计数。
-    NSLog("[SsgShell] 页面已恢复（收到 eventWebAlive），解除恢复锁")
-    recoveryInProgress = false
-    recoveryAttempts = 0
-    nextRecoveryAllowedAt = 0
+    guard backoff.onRecovered() else { return }
+    // 页面恢复了，退避清零，下一次卡死按第一次算。
+    NSLog("[SsgShell] 页面已恢复（收到 eventWebAlive），退避清零")
     awaitingPageStart = false
     reloadConfirm?.cancel()
     reloadConfirm = nil
@@ -117,8 +116,11 @@ final class Watchdog {
 
   private func checkAlive() {
     // §11.2.0 收到第一条之前永远不判定卡死，否则原生先上线、Web 还没发，
-    // 会每 60 秒 reload 一次。
-    guard firstAliveSeen else { return }
+    // 会每 60 秒 reload 一次。例外：已经在处理一次卡死（重建会把 firstAliveSeen 清掉），
+    // 这时页面发过 alive、只是还没恢复，要继续盯着，由退避窗口防止循环。
+    guard firstAliveSeen || backoff.recovering else { return }
+    // reload 刚发出去，这 10 秒归 reloadConfirm 管。
+    guard !awaitingPageStart else { return }
     let silence = Date().timeIntervalSince1970 - lastAliveAt
     guard silence > config().aliveTimeout else { return }
     onStallDetected(silence)
@@ -127,33 +129,34 @@ final class Watchdog {
   private func onStallDetected(_ silence: TimeInterval) {
     let now = Date().timeIntervalSince1970
     let silenceMs = Int(silence * 1000)
-    emit(.stallDetected, "已 \(silenceMs)ms 未收到 eventWebAlive", ["silenceMs": "\(silenceMs)"])
 
-    // §11.2.5 同一次卡死只处理一次。
-    guard !recoveryInProgress else { return }
-    if now < nextRecoveryAllowedAt {
-      // §11.2.5 连续失败要退避，不能进 reload 循环。
-      let waitMs = Int((nextRecoveryAllowedAt - now) * 1000)
+    let attempt: Int
+    let backoffMs: Int
+    switch backoff.onStall(now: now) {
+    case .throttled(wait: _, firstReport: false):
+      return
+    case .throttled(wait: let wait, firstReport: true):
+      // §11.2.5 上一次处理之后页面还没恢复：等退避窗口到期再处理，不能进 reload 循环。
+      let waitMs = Int(wait * 1000)
+      emit(.stallDetected, "已 \(silenceMs)ms 未收到 eventWebAlive", ["silenceMs": "\(silenceMs)"])
       emit(.recoveryThrottled, "退避中，\(waitMs)ms 后才允许下一次处理", ["waitMs": "\(waitMs)"])
       return
+    case .recover(attempt: let number, backoff: let wait):
+      attempt = number
+      backoffMs = Int(wait * 1000)
     }
-
-    recoveryInProgress = true
-    recoveryAttempts += 1
-    // §11.2.5 第一次处理后等 180 秒，之后 600 秒。
-    let backoff = recoveryAttempts <= 1 ? config().recoveryBackoffFirst : config().recoveryBackoffLater
-    nextRecoveryAllowedAt = now + backoff
+    emit(.stallDetected, "已 \(silenceMs)ms 未收到 eventWebAlive", ["silenceMs": "\(silenceMs)"])
 
     // §11.2.6 reload / 重建前后各记一条本地日志。
-    NSLog("[SsgShell] 判定卡死（静默 \(silenceMs)ms，第 \(recoveryAttempts) 次），执行 reload")
+    NSLog("[SsgShell] 判定卡死（静默 \(silenceMs)ms，第 \(attempt) 次），执行 reload")
     reloadCount += 1
     lastReloadAtMs = Int64(now * 1000)
     awaitingPageStart = true
     reload()
     emit(
       .reloadIssued,
-      "第 \(recoveryAttempts) 次恢复，下次最早 \(Int(backoff * 1000))ms 后",
-      ["attempt": "\(recoveryAttempts)", "backoffMs": "\(Int(backoff * 1000))"]
+      "第 \(attempt) 次恢复，下次最早 \(backoffMs)ms 后",
+      ["attempt": "\(attempt)", "backoffMs": "\(backoffMs)"]
     )
 
     // §11.2.3 reload 后 10 秒内页面没有开始加载 → 销毁并重建。
@@ -189,6 +192,9 @@ final class Watchdog {
   }
 
   /// WebView 实例被换掉：重新开始攒 alive，但保留退避窗口。
+  ///
+  /// 是看门狗自己触发的重建时 `checkAlive` 不会因为 firstAliveSeen 被清掉而停下 ——
+  /// 新页面仍然没动静的话，退避窗口到期后要再处理一次（§11.2.5）。
   func onWebViewRecreated() {
     firstAliveSeen = false
     lastAliveAt = Date().timeIntervalSince1970

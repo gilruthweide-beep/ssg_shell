@@ -14,8 +14,23 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
  */
 class SsgShellPlugin : FlutterPlugin, ActivityAware, SsgShellHostApi {
 
+    companion object {
+        /**
+         * `ImActivity` 当冷启动第一个 Activity 时，插件会起一个无界面引擎跑 Dart
+         * （见 [ShellCore.ensureDartEngine]），并以这个 id 放进 `FlutterEngineCache`。
+         * 宿主的 FlutterActivity 覆盖 `getCachedEngineId()` 返回它即可复用。
+         */
+        const val ENGINE_ID = "ssg_shell"
+    }
+
     private lateinit var appContext: Context
     private var binding: ActivityPluginBinding? = null
+
+    /** 这个引擎自己的 Dart 回调通道。 */
+    private var flutterApi: SsgShellFlutterApi? = null
+
+    /** Dart 上线前错过的状态类事件只在它第一次 `initialize()` 时补发，之后都是实时的。 */
+    private var stickyReplayed = false
 
     /** §6.2 通知权限的系统回调，转给 [PermissionCoordinator]。 */
     private val permissionListener =
@@ -34,13 +49,15 @@ class SsgShellPlugin : FlutterPlugin, ActivityAware, SsgShellHostApi {
         // 正常情况下 androidx.startup 已经装配过了，这里只兜宿主把 provider 去掉的情况。
         ShellStartupInitializer.ensure(appContext)
         SsgShellHostApi.setUp(binding.binaryMessenger, this)
-        ShellCore.setDartApi(SsgShellFlutterApi(binding.binaryMessenger))
+        flutterApi = SsgShellFlutterApi(binding.binaryMessenger).also(ShellCore::addDartApi)
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         SsgShellHostApi.setUp(binding.binaryMessenger, null)
-        // 引擎没了就不要再往 Dart 发事件，但壳本身继续跑（§8.4 体验与性能 2）。
-        ShellCore.setDartApi(null)
+        // 引擎没了就不要再往它那边发事件，但壳本身继续跑（§8.4 体验与性能 2）。
+        flutterApi?.let(ShellCore::removeDartApi)
+        flutterApi = null
+        stickyReplayed = false
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -60,7 +77,15 @@ class SsgShellPlugin : FlutterPlugin, ActivityAware, SsgShellHostApi {
 
     // --------------------------------------------------------- SsgShellHostApi
 
-    override fun initialize(config: ShellConfigDto): ShellInfo = ShellCore.initialize(config)
+    override fun initialize(config: ShellConfigDto): ShellInfo {
+        val info = ShellCore.initialize(config)
+        // 调到这里说明 Dart 已经挂好了接收端。补发要赶在返回值之前发出去。
+        if (!stickyReplayed) {
+            stickyReplayed = true
+            flutterApi?.let(ShellCore::replaySticky)
+        }
+        return info
+    }
 
     override fun preload() = ShellCore.preload()
 

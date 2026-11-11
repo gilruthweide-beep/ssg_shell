@@ -29,10 +29,11 @@ internal class Watchdog(
     private var firstAliveSeen = false
     private var lastAliveAtMs = 0L
 
-    /** §11.2.5 同一次卡死只处理一次，页面恢复后才允许下一次。 */
-    private var recoveryInProgress = false
-    private var recoveryAttempts = 0
-    private var nextRecoveryAllowedAtMs = 0L
+    /** §11.2.5 同一次卡死只处理一次；页面没恢复就按 180 秒 / 600 秒退避着再处理。 */
+    private val backoff = RecoveryBackoff(
+        firstBackoffMs = { config().recoveryBackoffFirstMs },
+        laterBackoffMs = { config().recoveryBackoffLaterMs },
+    )
 
     /** reload 之后有没有真的开始加载（§11.2.3）。 */
     private var awaitingPageStart = false
@@ -98,12 +99,9 @@ internal class Watchdog(
         val now = System.currentTimeMillis()
         firstAliveSeen = true
         lastAliveAtMs = now
-        if (recoveryInProgress) {
-            // 页面恢复了，解除「同一次卡死」的锁并清掉退避计数。
-            Log.i(TAG, "页面已恢复（收到 eventWebAlive），解除恢复锁")
-            recoveryInProgress = false
-            recoveryAttempts = 0
-            nextRecoveryAllowedAtMs = 0
+        if (backoff.onRecovered()) {
+            // 页面恢复了，退避清零，下一次卡死按第一次算。
+            Log.i(TAG, "页面已恢复（收到 eventWebAlive），退避清零")
             awaitingPageStart = false
             handler.removeCallbacksAndMessages(TOKEN_RELOAD_CONFIRM)
         }
@@ -111,8 +109,11 @@ internal class Watchdog(
 
     private fun checkAlive() {
         // §11.2.0 收到第一条之前永远不判定卡死，否则原生先上线、Web 还没发，
-        // 会每 60 秒 reload 一次。
-        if (!firstAliveSeen) return
+        // 会每 60 秒 reload 一次。例外：已经在处理一次卡死（重建会把 firstAliveSeen 清掉），
+        // 这时页面发过 alive、只是还没恢复，要继续盯着，由退避窗口防止循环。
+        if (!firstAliveSeen && !backoff.recovering) return
+        // reload 刚发出去，这 10 秒归 TOKEN_RELOAD_CONFIRM 管。
+        if (awaitingPageStart) return
         val now = System.currentTimeMillis()
         val silence = now - lastAliveAtMs
         if (silence <= config().aliveTimeoutMs) return
@@ -121,45 +122,37 @@ internal class Watchdog(
 
     private fun onStallDetected(silenceMs: Long) {
         val now = System.currentTimeMillis()
+        val decision = backoff.onStall(now)
+        if (decision is RecoveryBackoff.Decision.Throttled && !decision.firstReport) return
+
         emit(
             ShellEventType.STALL_DETECTED,
             "已 ${silenceMs}ms 未收到 eventWebAlive",
             mapOf("silenceMs" to silenceMs.toString()),
         )
-
-        if (recoveryInProgress) return // §11.2.5 同一次卡死只处理一次
-        if (now < nextRecoveryAllowedAtMs) {
-            // §11.2.5 连续失败要退避，不能进 reload 循环。
+        if (decision is RecoveryBackoff.Decision.Throttled) {
+            // §11.2.5 上一次处理之后页面还没恢复：等退避窗口到期再处理，不能进 reload 循环。
             emit(
                 ShellEventType.RECOVERY_THROTTLED,
-                "退避中，${nextRecoveryAllowedAtMs - now}ms 后才允许下一次处理",
-                mapOf("waitMs" to (nextRecoveryAllowedAtMs - now).toString()),
+                "退避中，${decision.waitMs}ms 后才允许下一次处理",
+                mapOf("waitMs" to decision.waitMs.toString()),
             )
             return
         }
-
-        recoveryInProgress = true
-        recoveryAttempts += 1
-        // §11.2.5 第一次处理后等 180 秒，之后 600 秒。
-        val backoff = if (recoveryAttempts <= 1) {
-            config().recoveryBackoffFirstMs
-        } else {
-            config().recoveryBackoffLaterMs
-        }
-        nextRecoveryAllowedAtMs = now + backoff
+        decision as RecoveryBackoff.Decision.Recover
 
         // §11.2.6 reload / 重建前后各记一条本地日志。
-        Log.w(TAG, "判定卡死（静默 ${silenceMs}ms，第 $recoveryAttempts 次），执行 reload")
+        Log.w(TAG, "判定卡死（静默 ${silenceMs}ms，第 ${decision.attempt} 次），执行 reload")
         reloadCount += 1
         lastReloadAtMs = now
         awaitingPageStart = true
         reload()
         emit(
             ShellEventType.RELOAD_ISSUED,
-            "第 $recoveryAttempts 次恢复，下次最早 ${backoff}ms 后",
+            "第 ${decision.attempt} 次恢复，下次最早 ${decision.backoffMs}ms 后",
             mapOf(
-                "attempt" to recoveryAttempts.toString(),
-                "backoffMs" to backoff.toString(),
+                "attempt" to decision.attempt.toString(),
+                "backoffMs" to decision.backoffMs.toString(),
             ),
         )
 
@@ -195,7 +188,12 @@ internal class Watchdog(
         lastAliveAtMs = System.currentTimeMillis()
     }
 
-    /** WebView 实例被换掉：重新开始攒 alive，但保留退避窗口。 */
+    /**
+     * WebView 实例被换掉：重新开始攒 alive，但保留退避窗口。
+     *
+     * 是看门狗自己触发的重建时 [checkAlive] 不会因为 firstAliveSeen 被清掉而停下 ——
+     * 新页面仍然没动静的话，退避窗口到期后要再处理一次（§11.2.5）。
+     */
     fun onWebViewRecreated() {
         firstAliveSeen = false
         lastAliveAtMs = System.currentTimeMillis()

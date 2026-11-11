@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import UIKit
 import WebKit
@@ -54,9 +55,28 @@ final class ShellUIDelegate: NSObject, WKUIDelegate {
       decisionHandler(.deny)
       return
     }
-    PermissionCoordinator.requestMicrophone { granted in
+    // 这次请求之前就已经被拒了：系统不会再弹框，Web 只能弹一句提示。
+    let alreadyDenied = AVCaptureDevice.authorizationStatus(for: .audio) == .denied
+    PermissionCoordinator.requestMicrophone { [weak self] granted in
       decisionHandler(granted ? .grant : .deny)
+      // §6.2 / §12.3「语音被拒后」：去系统设置的二次引导由原生负责。
+      // 用户刚在系统框里点了拒绝的那一次不追着弹。
+      if !granted && alreadyDenied { self?.showMicrophoneSettingsGuide() }
     }
+  }
+
+  private func showMicrophoneSettingsGuide() {
+    guard let presenter = host?.presenter else { return }
+    let alert = UIAlertController(
+      title: nil,
+      message: "麦克风权限已关闭，请在系统设置中允许后再发送语音",
+      preferredStyle: .alert
+    )
+    alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+    alert.addAction(UIAlertAction(title: "去设置", style: .default) { _ in
+      PermissionCoordinator.openAppSettings()
+    })
+    presenter.present(alert, animated: true)
   }
 
   // ------------------------------------------------------------- 页面弹窗

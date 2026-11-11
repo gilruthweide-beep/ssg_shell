@@ -104,7 +104,7 @@ enum PermissionCoordinator {
       }
     default:
       // 拒过了：Web 会弹「麦克风权限被拒绝，请在系统设置中允许后重试」（§6.1），
-      // 去设置页的引导由宿主在那条提示之后给（§6.2）。
+      // 去设置页的引导由 `ShellUIDelegate` 紧接着给（§6.2）。
       completion(false)
     }
   }

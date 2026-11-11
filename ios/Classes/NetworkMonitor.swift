@@ -17,12 +17,9 @@ final class NetworkMonitor {
   private let onAvailable: (NetworkType) -> Void
 
   private var pending: DispatchWorkItem?
+  /// 已经通知过 Web 的类型。断网时清空，下次恢复重新通知。
   private var lastNotifiedType: NetworkType?
-  private var lastNotifiedAt: TimeInterval = 0
   private var started = false
-
-  /// 类型没变时的最小通知间隔。
-  private let minRepeat: TimeInterval = 10
 
   private(set) var currentType: NetworkType = .none
 
@@ -71,14 +68,12 @@ final class NetworkMonitor {
       self.pending?.cancel()
       let work = DispatchWorkItem { [weak self] in
         guard let self else { return }
-        // 类型变了（Wi-Fi ↔ 蜂窝）一定要通知；类型没变时限一下频率。
-        // 多调一次对 Web 无害（§10.4 不受重连冷却限制），只是没必要。
-        let now = Date().timeIntervalSince1970
-        if self.lastNotifiedType != type || now - self.lastNotifiedAt >= self.minRepeat {
-          self.lastNotifiedType = type
-          self.lastNotifiedAt = now
-          self.onAvailable(type)
-        }
+        // 只在「恢复」和「切换」两个边沿上通知：断网时 lastNotifiedType 会被清空，
+        // Wi-Fi ↔ 蜂窝切换时类型不同。同一条网络上的路径更新（地址变化之类）不转发 ——
+        // Web 每收到一次 onNetwork 都会立刻检查连接并拉取最新消息（§10.4）。
+        guard self.lastNotifiedType != type else { return }
+        self.lastNotifiedType = type
+        self.onAvailable(type)
       }
       self.pending = work
       DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)

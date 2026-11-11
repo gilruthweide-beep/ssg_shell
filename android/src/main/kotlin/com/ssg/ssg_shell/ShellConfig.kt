@@ -38,14 +38,6 @@ internal data class ShellConfig(
     val consoleBufferSize: Int = 300,
     val backgroundColorArgb: Int = 0xFFFFFFFF.toInt(),
     val forwardConsole: Boolean = true,
-    /**
-     * WebView 铺满整个窗口，不摆进安全区。
-     *
-     * **默认关，因为这是对 §9.4 的偏离。** 打开之后页面里读 `env(safe-area-inset-*)`
-     * 不再是 0（§12.2 的安全区自测看的就是它），改成页面自己按真实值留白。
-     * 键盘仍然由原生消费 ime 的 inset（§9.2），只是不再消费 systemBars 和 displayCutout。
-     */
-    val webViewFullscreen: Boolean = false,
 ) {
     /** §2.1 原样返回落地 URL，不解析或重拼 query。 */
     fun resolvedUrl(): String = entryUrl
@@ -58,14 +50,12 @@ internal data class ShellConfig(
         private const val META_SHELL_VERSION = "com.ssg.shell.SHELL_VERSION"
         internal const val META_A_SIDE_ACTIVITY = "com.ssg.shell.A_SIDE_ACTIVITY"
         internal const val META_AUTO_PRELOAD = "com.ssg.shell.AUTO_PRELOAD"
-        private const val META_FULLSCREEN = "com.ssg.shell.WEBVIEW_FULLSCREEN"
 
         private const val PREFS = "ssg_shell"
         private const val KEY_ENTRY_URL = "entryUrl"
         private const val KEY_SHELL_VERSION = "shellVersion"
         private const val KEY_B_SIDE = "bSideEnabled"
         private const val KEY_KERNEL_WARNED = "kernelWarned"
-        private const val KEY_FULLSCREEN = "webViewFullscreen"
 
         /** 读 Manifest `<meta-data>` 加上落盘缓存，Dart 还没上线时就用这份。 */
         fun fromDisk(context: Context): ShellConfig {
@@ -81,11 +71,6 @@ internal data class ShellConfig(
                     ?: metaVersion.ifBlank { appVersionName(context) },
                 // §9.6 没有缓存时默认关：没确认过 B 面就不要抢在 A 面前面。
                 bSideEnabled = prefs.getBoolean(KEY_B_SIDE, false),
-                // Manifest 的 meta-data 只当默认值用，Dart 下发过就按落盘那份。
-                webViewFullscreen = prefs.getBoolean(
-                    KEY_FULLSCREEN,
-                    meta?.getBoolean(META_FULLSCREEN, false) ?: false,
-                ),
             )
         }
 
@@ -107,7 +92,6 @@ internal data class ShellConfig(
             consoleBufferSize = dto.consoleBufferSize.toInt(),
             backgroundColorArgb = dto.backgroundColorArgb.toInt(),
             forwardConsole = dto.forwardConsole,
-            webViewFullscreen = dto.webViewFullscreen,
         )
 
         fun persist(context: Context, config: ShellConfig) {
@@ -116,8 +100,6 @@ internal data class ShellConfig(
                 .putString(KEY_ENTRY_URL, config.entryUrl)
                 .putString(KEY_SHELL_VERSION, config.shellVersion)
                 .putBoolean(KEY_B_SIDE, config.bSideEnabled)
-                // §9.6 的冷启动路径上 ImActivity 读的是这份，所以布局模式也要落盘。
-                .putBoolean(KEY_FULLSCREEN, config.webViewFullscreen)
                 .apply()
         }
 

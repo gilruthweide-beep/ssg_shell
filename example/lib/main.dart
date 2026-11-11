@@ -38,7 +38,7 @@ class _ShellConsoleState extends State<ShellConsole> {
 
   ShellInfo? _info;
   KernelInfo? _kernel;
-  bool _bSide = true;
+  bool _bSide = false;
   String? _error;
 
   @override
@@ -57,14 +57,17 @@ class _ShellConsoleState extends State<ShellConsole> {
 
   Future<void> _boot() async {
     try {
+      // 不传 bSideEnabled：沿用上次落盘的开关，下面的开关控件也从原生读回来。
       final info = await _shell.initialize(
         const ShellConfig(entryUrl: kEntryUrl),
       );
       final kernel = await _shell.getKernelInfo();
+      final bSide = await _shell.isBSideEnabled();
       if (!mounted) return;
       setState(() {
         _info = info;
         _kernel = kernel;
+        _bSide = bSide;
       });
       // §11.7 内核过低一次性提示，允许忽略，不要阻断启动。
       if (kernel.verdict == KernelVerdict.belowMinimum) _warnKernel(kernel);
@@ -121,7 +124,7 @@ class _ShellConsoleState extends State<ShellConsole> {
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('B 面开关（§9.6）'),
-                subtitle: const Text('开启后冷启动直接进 Web，原生会落盘这个值'),
+                subtitle: const Text('开启后冷启动直接进 Web，原生会落盘这个值；关着时不预加载'),
                 value: _bSide,
                 onChanged: (value) async {
                   setState(() => _bSide = value);

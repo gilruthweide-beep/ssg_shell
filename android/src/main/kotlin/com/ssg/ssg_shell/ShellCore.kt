@@ -11,10 +11,15 @@ import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import io.flutter.FlutterInjector
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
+import io.flutter.embedding.engine.dart.DartExecutor
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * 壳的大脑。进程级单例，不依赖 Flutter 引擎是否活着。
@@ -39,9 +44,15 @@ internal object ShellCore {
         bSideEnabled = false,
     )
 
-    /** Dart 侧的回调通道。引擎没起来或已销毁时为 null，所有 emit 自动跳过。 */
-    @Volatile
-    private var dart: SsgShellFlutterApi? = null
+    /**
+     * Dart 侧的回调通道，每个挂了插件的引擎一条。一个都没有时所有 emit 自动跳过。
+     *
+     * 不止一条的情况：[ensureDartEngine] 起的无界面引擎之外，宿主的 FlutterActivity
+     * 又自己建了一个。两边都要收到事件，后来的那个销毁时也不能把先来的通道带走。
+     */
+    private val dartApis = CopyOnWriteArrayList<SsgShellFlutterApi>()
+
+    private var headlessEngineRequested = false
 
     private val console = ConsoleLogBuffer()
     private val gate = NotificationGate()
@@ -70,6 +81,24 @@ internal object ShellCore {
 
     @Volatile
     private var webReady: Boolean = false
+
+    /**
+     * 带状态含义的几条 Web 事件各留最近一条。Dart 上线之前发生的事件它收不到，
+     * 而 `login` 同一 uid 只发一次（§3.1）—— 丢了就不会再绑 OneSignal（§5.2）。
+     * Dart 调 `initialize()` 时由 [replaySticky] 补发。
+     */
+    private var stickyWebReady: WebEvent? = null
+    private var stickyLogin: WebEvent? = null
+    private var stickyUnread: WebEvent? = null
+    private var stickyChatOpen: WebEvent? = null
+
+    /**
+     * 首屏加载失败时没有容器挂着（预加载阶段），重试页没处可盖。
+     * 记下来，容器挂上时补（[onHostAttached]）。
+     */
+    private var loadFailed: Boolean = false
+    private var loadFailedMessage: String? = null
+
     private var reportedChannelCode: String = ""
     private var lastWebReadyAtMs: Long? = null
 
@@ -130,8 +159,56 @@ internal object ShellCore {
         }
     }
 
-    fun setDartApi(api: SsgShellFlutterApi?) {
-        dart = api
+    fun addDartApi(api: SsgShellFlutterApi) {
+        dartApis.addIfAbsent(api)
+    }
+
+    fun removeDartApi(api: SsgShellFlutterApi) {
+        dartApis.remove(api)
+    }
+
+    /**
+     * Dart 调 `initialize()` 时补发它上线之前错过的状态类事件，必须在主线程、
+     * 在 `initialize` 返回之前调 —— Dart 那边靠「先到事件、后到返回值」这个顺序接住它们。
+     */
+    fun replaySticky(api: SsgShellFlutterApi) {
+        listOfNotNull(stickyWebReady, stickyLogin, stickyUnread, stickyChatOpen)
+            .forEach { api.onWebEvent(it) {} }
+    }
+
+    /**
+     * §5 的 OneSignal 绑定、登录后申请通知权限、通知点击深链都接在 Dart 上（见 README）。
+     * `ImActivity` 当冷启动第一个 Activity 时（§8.4 体验与性能 2）没有 FlutterActivity，
+     * 引擎不会自己起来，这些就全部不跑。这里补一个不带界面的引擎去跑宿主的 `main()`。
+     *
+     * 已经有引擎挂着插件时什么都不做。引擎放进 [FlutterEngineCache]，宿主的
+     * FlutterActivity 可以用 [SsgShellPlugin.ENGINE_ID] 复用它，避免 `main()` 跑两遍。
+     */
+    fun ensureDartEngine() {
+        if (dartApis.isNotEmpty() || headlessEngineRequested) return
+        headlessEngineRequested = true
+        runCatching {
+            val loader = FlutterInjector.instance().flutterLoader()
+            loader.startInitialization(appContext)
+            loader.ensureInitializationCompleteAsync(appContext, null, main) {
+                // 宿主自己预热的引擎抢先到了，就不用再起一个。
+                if (dartApis.isNotEmpty()) return@ensureInitializationCompleteAsync
+                runCatching {
+                    val engine = FlutterEngine(appContext)
+                    engine.dartExecutor.executeDartEntrypoint(
+                        DartExecutor.DartEntrypoint.createDefault(),
+                    )
+                    FlutterEngineCache.getInstance().put(SsgShellPlugin.ENGINE_ID, engine)
+                    Log.i(TAG, "没有 Flutter 引擎在跑，已起一个无界面引擎执行 Dart 入口")
+                }.onFailure {
+                    headlessEngineRequested = false
+                    Log.e(TAG, "无界面 Flutter 引擎启动失败，Dart 侧的推送绑定不会生效", it)
+                }
+            }
+        }.onFailure {
+            headlessEngineRequested = false
+            Log.e(TAG, "Flutter 初始化失败，Dart 侧的推送绑定不会生效", it)
+        }
     }
 
     fun requireContext(): Context = appContext
@@ -303,7 +380,7 @@ internal object ShellCore {
     }
 
     private fun doRecreate() {
-        webReady = false
+        onPageReset()
         gate.onPageLoadStarted()
         ImWebViewHolder.recreate(appContext, config)
         watchdog.onWebViewRecreated()
@@ -439,6 +516,7 @@ internal object ShellCore {
         when (event.name) {
             WebEventName.WEB_READY -> {
                 webReady = true
+                stickyWebReady = event
                 lastWebReadyAtMs = event.receivedAtMs
                 // §9.6 收到 eventWebReady 后立即撤 splash，不要用固定时长定时器。
                 ImWebViewHolder.host?.dismissSplash(ShellEventType.SPLASH_DISMISSED)
@@ -453,11 +531,18 @@ internal object ShellCore {
 
             WebEventName.WEB_ALIVE -> watchdog.onWebAlive()
 
-            WebEventName.CHAT_OPEN -> gate.onChatOpen(event.chatId)
+            WebEventName.CHAT_OPEN -> {
+                gate.onChatOpen(event.chatId)
+                stickyChatOpen = event.takeIf { gate.trackedChatId != null }
+            }
 
-            WebEventName.CHAT_CLOSE -> gate.onChatClose(event.chatId)
+            WebEventName.CHAT_CLOSE -> {
+                gate.onChatClose(event.chatId)
+                if (gate.trackedChatId == null) stickyChatOpen = null
+            }
 
             WebEventName.UNREAD_COUNT -> {
+                stickyUnread = event
                 val count = (event.unreadCount ?: 0L).toInt()
                 gate.onUnreadCount(count)
                 // §5.4 角标数 = Web 给的未读总数，count 为 0 时清零。
@@ -466,25 +551,51 @@ internal object ShellCore {
 
             // §6.2 通知权限在收到 eventLogin 之后才允许申请，这里只放开闸门，
             // 真正弹窗由 Dart 侧决定时机（宿主可能要先做自己的引导页）。
-            WebEventName.LOGIN -> loginSeen = true
+            WebEventName.LOGIN -> {
+                loginSeen = true
+                stickyLogin = event
+            }
 
             WebEventName.LOGOUT -> {
                 loginSeen = false
+                stickyLogin = null
+                stickyChatOpen = null
                 // §5.4 退出登录时 Web 会发 unreadCount=0，这里不额外清，交给那条事件。
             }
 
             else -> Unit
         }
 
-        dart?.onWebEvent(event) { /* Dart 侧没挂监听不是错误 */ }
+        dartApis.forEach { api -> api.onWebEvent(event) { /* Dart 侧没挂监听不是错误 */ } }
     }
 
     fun hasLoggedIn(): Boolean = loginSeen
 
+    fun isWebReady(): Boolean = webReady
+
+    /**
+     * 容器挂上来时补上它错过的状态。
+     *
+     * `eventWebReady` 每次页面加载只发一次，预加载期间发过就不会再来 —— splash 的那一半
+     * 由容器自己读 [isWebReady] 决定；这里补首屏加载失败的重试页（§9.6）。
+     */
+    fun onHostAttached(host: ShellWebViewHost) {
+        if (loadFailed) host.showErrorPage(loadFailedMessage)
+    }
+
+    /** 页面要重新加载了（reload、重建）：上一个页面留下的状态全部作废。 */
+    private fun onPageReset() {
+        webReady = false
+        stickyWebReady = null
+        stickyChatOpen = null
+        loadFailed = false
+        loadFailedMessage = null
+    }
+
     fun onPageStarted(url: String?) {
         // §5.4 页面重新加载时不会发 chatClose，原生在页面开始加载时要清空记住的 chatId。
         gate.onPageLoadStarted()
-        webReady = false
+        onPageReset()
         watchdog.onPageStarted()
         watchdog.onPageLoadStartedExternally()
         ImWebViewHolder.host?.hideErrorPage()
@@ -498,6 +609,8 @@ internal object ShellCore {
     fun onMainFrameLoadFailed(url: String, description: String) {
         Log.w(TAG, "首屏加载失败 $url: $description")
         main.post {
+            loadFailed = true
+            loadFailedMessage = null
             ImWebViewHolder.host?.showErrorPage(null)
             emit(ShellEventType.LOAD_FAILED, description, mapOf("url" to url))
         }
@@ -505,9 +618,10 @@ internal object ShellCore {
 
     fun onSslError(primaryError: Int) {
         main.post {
-            ImWebViewHolder.host?.showErrorPage(
-                appContext.getString(R.string.ssg_shell_ssl_body),
-            )
+            val message = appContext.getString(R.string.ssg_shell_ssl_body)
+            loadFailed = true
+            loadFailedMessage = message
+            ImWebViewHolder.host?.showErrorPage(message)
             emit(
                 ShellEventType.LOAD_FAILED,
                 "SSL 校验失败（primaryError=$primaryError）",
@@ -546,17 +660,14 @@ internal object ShellCore {
             ConsoleLevel.DEBUG -> Log.d(tag, message)
             else -> Log.i(tag, message)
         }
-        main.post {
-            dart?.onShellEvent(
-                ShellEvent(
-                    type = ShellEventType.CONSOLE_MESSAGE,
-                    atMs = record.atMs,
-                    extra = emptyMap(),
-                    message = message,
-                    console = record,
-                ),
-            ) {}
-        }
+        val event = ShellEvent(
+            type = ShellEventType.CONSOLE_MESSAGE,
+            atMs = record.atMs,
+            extra = emptyMap(),
+            message = message,
+            console = record,
+        )
+        main.post { dartApis.forEach { api -> api.onShellEvent(event) {} } }
     }
 
     /**
@@ -661,9 +772,9 @@ internal object ShellCore {
             network = networkType,
         )
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            dart?.onShellEvent(event) {}
+            dartApis.forEach { api -> api.onShellEvent(event) {} }
         } else {
-            main.post { dart?.onShellEvent(event) {} }
+            main.post { dartApis.forEach { api -> api.onShellEvent(event) {} } }
         }
     }
 

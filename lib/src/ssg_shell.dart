@@ -35,6 +35,11 @@ class SsgShell implements SsgShellFlutterApi {
   final StreamController<ShellEvent> _shellEvents = StreamController<ShellEvent>.broadcast();
 
   bool _wired = false;
+
+  /// [initialize] 进行期间到达的 Web 事件先攒着，见 [_releaseHeld]。
+  bool _holding = false;
+  final List<WebEvent> _held = <WebEvent>[];
+
   bool _requestNotificationAfterLogin = true;
   bool _notificationRequested = false;
 
@@ -93,6 +98,11 @@ class SsgShell implements SsgShellFlutterApi {
   ///
   /// [autoPreload] 为 true 时紧接着调一次 [preload]。原生侧更早的预加载（进程启动即建
   /// WebView，§8.4 体验与性能 1）由 Manifest 的 `AUTO_PRELOAD` meta-data 控制，不走这里。
+  ///
+  /// 原生预加载时，Web 可能在 Dart 上线之前就已经发过 `webReady` / `login` /
+  /// `unreadCount` / `chatOpen`。这几条带状态含义的事件会在这次调用里补发一遍，
+  /// 并在返回之后才进 [webEvents] —— 所以监听要么在调用之前挂好，要么紧跟在
+  /// `await initialize(...)` 后面同步挂上，中间不要再隔别的 `await`。
   Future<ShellInfo> initialize(
     ShellConfig config, {
     bool requestNotificationAfterLogin = true,
@@ -110,10 +120,32 @@ class SsgShell implements SsgShellFlutterApi {
     _wire();
     _config = config;
     _requestNotificationAfterLogin = requestNotificationAfterLogin;
-    final info = await _host.initialize(config.toDto());
-    _shellInfo = info;
-    if (autoPreload) await _host.preload();
-    return info;
+    _holding = true;
+    try {
+      // 没传 B 面开关就沿用原生落盘的那份，不拿默认值去覆盖它。
+      final persistedBSide =
+          config.bSideEnabled == null && await _host.isBSideEnabled();
+      final info = await _host.initialize(config.toDto(persistedBSide: persistedBSide));
+      _shellInfo = info;
+      if (autoPreload) await _host.preload();
+      return info;
+    } finally {
+      if (_held.isEmpty || _webEvents.hasListener) {
+        _releaseHeld();
+      } else {
+        // 还没人监听：排到事件循环的下一个任务，让调用方 `await` 之后同步挂上的
+        // 监听先就位，再放事件。
+        Timer.run(_releaseHeld);
+      }
+    }
+  }
+
+  void _releaseHeld() {
+    _holding = false;
+    final held = List<WebEvent>.of(_held);
+    _held.clear();
+    if (_webEvents.isClosed) return;
+    held.forEach(_webEvents.add);
   }
 
   void _wire() {
@@ -249,6 +281,10 @@ class SsgShell implements SsgShellFlutterApi {
       case WebEventName.chatRead:
       case WebEventName.unknown:
         break;
+    }
+    if (_holding) {
+      _held.add(event);
+      return;
     }
     if (!_webEvents.isClosed) _webEvents.add(event);
   }

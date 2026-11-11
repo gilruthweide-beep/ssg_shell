@@ -10,7 +10,7 @@ class ShellConfig {
     @Deprecated('Put channelcode in entryUrl; this value is ignored.')
     this.channelCode = '',
     this.shellVersion = '',
-    this.bSideEnabled = true,
+    this.bSideEnabled,
     this.splashTimeout = const Duration(seconds: 30),
     this.heartbeatInterval = const Duration(seconds: 20),
     this.aliveTimeout = const Duration(seconds: 60),
@@ -25,6 +25,7 @@ class ShellConfig {
     this.consoleBufferSize = 300,
     this.backgroundColorArgb = 0xFFFFFFFF,
     this.forwardConsole = true,
+    @Deprecated('Not implemented on either platform; this value is ignored.')
     this.webViewFullscreen = false,
   });
 
@@ -50,7 +51,11 @@ class ShellConfig {
 
   /// §9.6 B 面开关。原生会落盘，下次冷启动直接按缓存走，不等 Dart ——
   /// 所以「B 面开关的判断」不会以等待界面的形式出现在用户面前。
-  final bool bSideEnabled;
+  ///
+  /// 不传（null）表示**沿用已经落盘的值**，从没设过时是关。这样每次启动照常调
+  /// `initialize()` 不会把 [SsgShell.setBSideEnabled] 存下的结果冲掉。
+  /// 传 true / false 则以这次为准并落盘。
+  final bool? bSideEnabled;
 
   /// §9.6 splash 上限。`eventWebReady` 可能永远不来（内核过低的不兼容页、
   /// 脚本加载失败的重试页），到时撤掉 splash 让用户看到页面或原生重试页。
@@ -96,15 +101,10 @@ class ShellConfig {
   /// §11.6 把 Web 的 console 落到原生日志并上抛 Dart。
   final bool forwardConsole;
 
-  /// WebView 铺满整个窗口，不摆进安全区。
+  /// 没有实现，两端都忽略这个值：WebView 始终按 §9.4 摆在安全区内。
   ///
-  /// **默认关，因为这是对 §9.4 的偏离。** 规范要求原生把 WebView 摆在状态栏 / 刘海 /
-  /// 灵动岛以下、Home 指示条（Android 为导航栏）以上，页面里读 `env(safe-area-inset-*)`
-  /// 必须为 0 —— §12.2 的「安全区」自测就是看这个。打开之后那一项不再成立，改成页面
-  /// 自己按 `env()` 留白（此时 `env()` 报的是真实值）。
-  ///
-  /// 键盘不受影响：打开时原生仍然消费 ime 的 inset（§9.2 要求输入框紧贴键盘、
-  /// 完整可见），只是不再消费 systemBars 和 displayCutout。
+  /// 保留字段只为不改动 Pigeon 的消息格式。
+  @Deprecated('Not implemented on either platform; this value is ignored.')
   final bool webViewFullscreen;
 
   /// §8.1 HTTPS 自检。`http://localhost` 之类的本地调试地址放行。
@@ -116,12 +116,13 @@ class ShellConfig {
         (uri.host == 'localhost' || uri.host == '127.0.0.1' || uri.host == '10.0.2.2');
   }
 
-  ShellConfigDto toDto() => ShellConfigDto(
+  /// [persistedBSide] 是原生已经落盘的 B 面开关，只在 [bSideEnabled] 没传时用到。
+  ShellConfigDto toDto({bool persistedBSide = false}) => ShellConfigDto(
         entryUrl: entryUrl,
         // 保留 Pigeon 的旧字段位置，避免改变消息格式；原生不再使用它。
         channelCode: '',
         shellVersion: shellVersion,
-        bSideEnabled: bSideEnabled,
+        bSideEnabled: bSideEnabled ?? persistedBSide,
         splashTimeoutMs: splashTimeout.inMilliseconds,
         heartbeatIntervalMs: heartbeatInterval.inMilliseconds,
         aliveTimeoutMs: aliveTimeout.inMilliseconds,
@@ -136,7 +137,8 @@ class ShellConfig {
         consoleBufferSize: consoleBufferSize,
         backgroundColorArgb: backgroundColorArgb,
         forwardConsole: forwardConsole,
-        webViewFullscreen: webViewFullscreen,
+        // 保留 Pigeon 的字段位置；原生不读它。
+        webViewFullscreen: false,
       );
 
   ShellConfig copyWith({
@@ -159,6 +161,7 @@ class ShellConfig {
     int? consoleBufferSize,
     int? backgroundColorArgb,
     bool? forwardConsole,
+    @Deprecated('Not implemented on either platform; this value is ignored.')
     bool? webViewFullscreen,
   }) =>
       ShellConfig(
@@ -183,6 +186,7 @@ class ShellConfig {
         consoleBufferSize: consoleBufferSize ?? this.consoleBufferSize,
         backgroundColorArgb: backgroundColorArgb ?? this.backgroundColorArgb,
         forwardConsole: forwardConsole ?? this.forwardConsole,
+        // ignore: deprecated_member_use_from_same_package
         webViewFullscreen: webViewFullscreen ?? this.webViewFullscreen,
       );
 

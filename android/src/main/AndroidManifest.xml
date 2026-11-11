@@ -10,8 +10,9 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- §10.3 电池优化白名单。规范要求不在首启弹，只在设置页引导时用。 -->
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- §10.3 的电池优化白名单：REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 不在 §6.3 的清单里，
+         应用市场对它有专门限制，所以插件不替宿主声明。宿主声明了就能直接弹系统的
+         白名单确认框，没声明时退到系统的电池优化列表页，见 PermissionCoordinator。 -->
 
     <!-- §8.4 体验与性能 7 / §9.1：Android 14 以上的返回手势要有预览动画并走
          OnBackPressedDispatcher 同一套逻辑，必须声明这个开关。宿主自己也声明了
@@ -19,10 +20,11 @@
     <application android:enableOnBackInvokedCallback="true">
         <!-- §8.4 IM 的 WebView 由原生 Activity 承载，不是 PlatformView。
              宿主 App 想让它当冷启动第一个 Activity（§8.4 体验与性能 2）时，
-             在自己的 Manifest 里 merge 一个 LAUNCHER intent-filter 进来即可。 -->
+             在自己的 Manifest 里 merge 一个 LAUNCHER intent-filter 进来即可。
+             这里故意不写 android:exported：没有 intent-filter 时默认就是 false；
+             写死 false 的话宿主那边的 exported="true" 会合并冲突。 -->
         <activity
             android:name="com.ssg.ssg_shell.ImActivity"
-            android:exported="false"
             android:hardwareAccelerated="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.SsgShell.Im"

@@ -8,4 +8,8 @@
     <string name="ssg_shell_kernel_outdated">系统 WebView 版本过低，建议更新「Android System WebView」或 Chrome 后使用</string>
     <string name="ssg_shell_kernel_update">去更新</string>
     <string name="ssg_shell_kernel_ignore">忽略</string>
+    <!-- §6.2 麦克风被永久拒绝后的二次引导。 -->
+    <string name="ssg_shell_mic_denied">麦克风权限已关闭，请在系统设置中允许后再发送语音</string>
+    <string name="ssg_shell_open_settings">去设置</string>
+    <string name="ssg_shell_cancel">取消</string>
 </resources>

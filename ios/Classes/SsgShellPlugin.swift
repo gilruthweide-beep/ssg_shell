@@ -8,11 +8,22 @@ import UIKit
 /// §11.2 的存活监测必须已经在跑。插件被 detach（引擎销毁）也不能停掉这些。
 public class SsgShellPlugin: NSObject, FlutterPlugin, SsgShellHostApi {
 
+  private let flutterApi: SsgShellFlutterApi
+
+  /// Dart 上线前错过的状态类事件只在它第一次 `initialize()` 时补发，之后都是实时的。
+  private var stickyReplayed = false
+
+  private init(flutterApi: SsgShellFlutterApi) {
+    self.flutterApi = flutterApi
+    super.init()
+  }
+
   public static func register(with registrar: FlutterPluginRegistrar) {
-    let instance = SsgShellPlugin()
+    let flutterApi = SsgShellFlutterApi(binaryMessenger: registrar.messenger())
+    let instance = SsgShellPlugin(flutterApi: flutterApi)
     SsgShellHostApiSetup.setUp(binaryMessenger: registrar.messenger(), api: instance)
     ShellCore.shared.attach()
-    ShellCore.shared.setDartApi(SsgShellFlutterApi(binaryMessenger: registrar.messenger()))
+    ShellCore.shared.setDartApi(flutterApi)
     // 注册表只弱引用插件实例，publish 一下才活得过这个方法。
     registrar.publish(instance)
 
@@ -36,7 +47,13 @@ public class SsgShellPlugin: NSObject, FlutterPlugin, SsgShellHostApi {
   // --------------------------------------------------------- SsgShellHostApi
 
   func initialize(config: ShellConfigDto) throws -> ShellInfo {
-    ShellCore.shared.initialize(config)
+    let info = ShellCore.shared.initialize(config)
+    // 调到这里说明 Dart 已经挂好了接收端。补发要赶在返回值之前发出去。
+    if !stickyReplayed {
+      stickyReplayed = true
+      ShellCore.shared.replaySticky(to: flutterApi)
+    }
+    return info
   }
 
   func preload() throws {

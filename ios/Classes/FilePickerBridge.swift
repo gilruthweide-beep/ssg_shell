@@ -110,6 +110,8 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
 
     let group = DispatchGroup()
     // 结果要保持用户选择的顺序，所以先占位再按下标填。
+    // `loadFileRepresentation` 的回调各自落在不同的后台线程上，多选时会同时回来，
+    // 这两个变量的读写都要过 `lock`。
     var manifest = [[String: Any]?](repeating: nil, count: results.count)
     var failures = 0
 
@@ -117,15 +119,17 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
       group.enter()
       stage(result.itemProvider) { [weak self] file in
         defer { group.leave() }
-        guard let self, let file else {
+        guard let self else { return }
+        guard let file else {
+          self.lock.lock()
           failures += 1
+          self.lock.unlock()
           return
         }
         let token = UUID().uuidString
+        let chunks = max(1, Int(ceil(Double(file.size) / Double(Self.rawChunkSize))))
         self.lock.lock()
         self.staged[token] = file
-        self.lock.unlock()
-        let chunks = max(1, Int(ceil(Double(file.size) / Double(Self.rawChunkSize))))
         manifest[index] = [
           "token": token,
           "name": file.name,
@@ -133,16 +137,20 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
           "size": file.size,
           "chunks": chunks,
         ]
+        self.lock.unlock()
       }
     }
 
     group.notify(queue: .main) { [weak self] in
       guard let self else { return }
+      self.lock.lock()
       let files = manifest.compactMap { $0 }
+      let failed = failures
+      self.lock.unlock()
       self.deliver?(requestId, files)
       // §7.3.4「不要静默丢弃用户选中的文件」：真的有取不到的，明确告诉用户。
-      if failures > 0 {
-        self.warn("有 \(failures) 个文件读取失败，请重试或换一个文件")
+      if failed > 0 {
+        self.warn("有 \(failed) 个文件读取失败，请重试或换一个文件")
       }
     }
   }

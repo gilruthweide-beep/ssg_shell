@@ -91,8 +91,9 @@ internal object ImWebViewHolder {
 
         // §8.4 体验与性能 3：背景色与首屏一致，启动和键盘弹收时边缘不闪黑。
         web.setBackgroundColor(config.backgroundColorArgb)
-        // §8.4 体验与性能 6：保持硬件加速，软件绘制下滚动和键盘动画会明显卡顿。
-        web.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+        // §8.4 体验与性能 6：保持硬件加速，也不要给 WebView 套离屏绘制。
+        // 默认的 LAYER_TYPE_NONE 就是随窗口硬件加速直接上屏；LAYER_TYPE_HARDWARE 反而是
+        // 先画进一张离屏纹理再合成，所以这里什么都不设。
         web.isHorizontalScrollBarEnabled = false
         web.overScrollMode = WebView.OVER_SCROLL_NEVER
 

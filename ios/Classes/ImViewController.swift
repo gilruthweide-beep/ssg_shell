@@ -41,7 +41,15 @@ final class ImViewController: UIViewController, ShellWebViewHost {
     ImWebViewHolder.shared.host = self
     ImWebViewHolder.shared.refreshUserAgent()
 
-    installSplash()
+    if ShellCore.shared.isWebReady {
+      // eventWebReady 每次页面加载只发一次。WebView 是预加载的、或者这是关掉后重新打开的
+      // 容器，那一条早就发过了，不会再来 —— 这时再盖 splash 就只能干等到上限。
+      splashUp = false
+    } else {
+      installSplash()
+    }
+    // 预加载阶段首屏就加载失败的话，那时没有容器，重试页现在补上。
+    ShellCore.shared.onHostAttached(self)
 
     if config.entryUrl.isEmpty {
       showErrorPage("入口地址未配置（§2.1）")
@@ -61,12 +69,16 @@ final class ImViewController: UIViewController, ShellWebViewHost {
   }
 
   deinit {
-    if ImWebViewHolder.shared.host === self {
-      ImWebViewHolder.shared.host = nil
+    // `host` 是弱引用，走到这里时已经自动置空了；不为空说明新的容器已经接手。
+    let replaced = ImWebViewHolder.shared.host != nil
+    if !replaced {
+      ImWebViewHolder.shared.filePicker.dispose()
     }
-    ImWebViewHolder.shared.filePicker.dispose()
     // §10.6 只取下，不销毁：重建 WebView = 重新加载整个 Web = 重建长连接 + 重拉历史。
-    ImWebViewHolder.shared.webView?.removeFromSuperview()
+    // 只取自己挂着的那一个 —— 关掉后立刻重开时，WebView 可能已经挂到新容器上了。
+    if isViewLoaded, let web = ImWebViewHolder.shared.webView, web.superview === view {
+      web.removeFromSuperview()
+    }
   }
 
   /// §9.4 状态栏用深色图标（白底）。登录页、深色模式下也一样，不按页面颜色取色。

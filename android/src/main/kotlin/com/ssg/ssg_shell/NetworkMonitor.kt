@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -17,6 +19,10 @@ import android.util.Log
  *
  * 断网时不调（`onNetwork('none')` 会被 Web 忽略），也不在网络还没通时提前调：
  * 那次重试会失败，之后要等下一次重试。
+ *
+ * 只在「恢复」和「切换」这两个边沿上通知。同一条网络上系统会因为带宽、信号变化反复回调
+ * `onCapabilitiesChanged`，而 Web 每收到一次 `onNetwork` 都会立刻检查连接并拉取最新消息
+ * （§10.4），这些重复回调不能转发。
  */
 internal class NetworkMonitor(
     private val context: Context,
@@ -32,24 +38,44 @@ internal class NetworkMonitor(
     var currentType: NetworkType = NetworkType.NONE
         private set
 
-    private var lastNotifiedType: NetworkType? = null
-    private var lastNotifiedAtMs = 0L
+    /** 已经通知过 Web 的那条网络。断开或失去 VALIDATED 时清空，下次恢复重新通知。 */
+    @Volatile
+    private var notifiedNetwork: Network? = null
+
+    @Volatile
+    private var notifiedType: NetworkType? = null
+
+    /** 已经排进去抖、还没发出去的那一次。同一条不重排，否则回调够密的话永远发不出去。 */
+    @Volatile
+    private var pendingNetwork: Network? = null
+
+    @Volatile
+    private var pendingType: NetworkType? = null
     private var registered = false
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            if (!isDefault(network)) return
             val validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             val type = typeOf(caps)
             currentType = if (validated) type else NetworkType.NONE
-            if (!validated) return
+            if (!validated) {
+                // 这条网络又不通了（比如重新走认证）：撤掉还没发出去的通知，等它恢复。
+                forget()
+                return
+            }
+            // 同一条网络、同一种类型已经通知过：只是带宽之类的属性变了。
+            if (network == notifiedNetwork && type == notifiedType) return
+            if (network == pendingNetwork && type == pendingType) return
             // Wi-Fi ↔ 蜂窝切换也要调；去抖 1~2 秒，不要每个系统回调都转发。
-            schedule(type)
+            schedule(network, type)
         }
 
         override fun onLost(network: Network) {
+            // 按能力订阅时（API 23）非默认网络断开不算断网。
+            if (network != notifiedNetwork && network != pendingNetwork && !isDefault(network)) return
             currentType = NetworkType.NONE
-            lastNotifiedType = null
-            handler.removeCallbacksAndMessages(TOKEN)
+            forget()
             // 断网时不用调（§10.4.4）。
         }
 
@@ -62,7 +88,18 @@ internal class NetworkMonitor(
         if (registered) return
         val cm = manager ?: return
         registered = runCatching {
-            cm.registerDefaultNetworkCallback(callback)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                cm.registerDefaultNetworkCallback(callback)
+            } else {
+                // registerDefaultNetworkCallback 要 API 24，而 minSdk 是 23。
+                // Android 6.0 上退到按能力订阅，精度差一点（不只报默认网络），但不至于收不到。
+                cm.registerNetworkCallback(
+                    NetworkRequest.Builder()
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .build(),
+                    callback,
+                )
+            }
             true
         }.onFailure { Log.w(TAG, "注册网络回调失败", it) }.getOrDefault(false)
         // 启动时先同步一次当前状态，但不触发回调：§10.4 要求网络真正可用后才调，
@@ -77,26 +114,34 @@ internal class NetworkMonitor(
         runCatching { manager?.unregisterNetworkCallback(callback) }
     }
 
-    private fun schedule(type: NetworkType) {
+    /** API 24 起订阅的就是默认网络；API 23 是按能力订阅的，要自己筛。 */
+    private fun isDefault(network: Network): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.N || network == manager?.activeNetwork
+
+    private fun schedule(network: Network, type: NetworkType) {
         handler.removeCallbacksAndMessages(TOKEN)
+        pendingNetwork = network
+        pendingType = type
         val delay = debounceMs().coerceIn(500, 5_000)
         handler.postAtTime(
             {
-                // 类型变了（Wi-Fi ↔ 蜂窝）一定要通知；类型没变时限一下频率：
-                // 系统在同一个网络上会反复回调 onCapabilitiesChanged，去抖只能收掉突发，
-                // 收不掉持续的涓流。多调一次对 Web 无害（§10.4 不受重连冷却限制），
-                // 只是没必要。
-                val now = System.currentTimeMillis()
-                val changed = lastNotifiedType != type
-                if (changed || now - lastNotifiedAtMs >= MIN_REPEAT_MS) {
-                    lastNotifiedType = type
-                    lastNotifiedAtMs = now
-                    onAvailable(type)
-                }
+                pendingNetwork = null
+                pendingType = null
+                notifiedNetwork = network
+                notifiedType = type
+                onAvailable(type)
             },
             TOKEN,
             android.os.SystemClock.uptimeMillis() + delay,
         )
+    }
+
+    private fun forget() {
+        pendingNetwork = null
+        pendingType = null
+        notifiedNetwork = null
+        notifiedType = null
+        handler.removeCallbacksAndMessages(TOKEN)
     }
 
     private fun snapshotType(): NetworkType {
@@ -117,9 +162,6 @@ internal class NetworkMonitor(
 
     private companion object {
         const val TAG = "SsgShell"
-
-        /** 类型没变时的最小通知间隔。 */
-        const val MIN_REPEAT_MS = 10_000L
 
         val TOKEN = Any()
     }

@@ -39,6 +39,20 @@ final class ShellCore {
   private var webVisible = false
 
   private var webReady = false
+
+  /// 带状态含义的几条 Web 事件各留最近一条。Dart 上线之前发生的事件它收不到，
+  /// 而 `login` 同一 uid 只发一次（§3.1）—— 丢了就不会再绑 OneSignal（§5.2）。
+  /// Dart 调 `initialize()` 时由 `replaySticky(to:)` 补发。
+  private var stickyWebReady: WebEvent?
+  private var stickyLogin: WebEvent?
+  private var stickyUnread: WebEvent?
+  private var stickyChatOpen: WebEvent?
+
+  /// 首屏加载失败时没有容器挂着（预加载阶段），重试页没处可盖。
+  /// 记下来，容器挂上时补（`onHostAttached`）。
+  private var loadFailed = false
+  private var loadFailedMessage: String?
+
   private var reportedChannelCode = ""
   private var lastWebReadyAtMs: Int64?
 
@@ -106,6 +120,34 @@ final class ShellCore {
   }
 
   func currentConfig() -> ShellConfig { config }
+
+  /// Dart 调 `initialize()` 时补发它上线之前错过的状态类事件。必须在主线程、
+  /// 在 `initialize` 返回之前调 —— Dart 那边靠「先到事件、后到返回值」这个顺序接住它们。
+  func replaySticky(to api: SsgShellFlutterApi) {
+    for event in [stickyWebReady, stickyLogin, stickyUnread, stickyChatOpen] {
+      guard let event else { continue }
+      api.onWebEvent(event: event) { _ in }
+    }
+  }
+
+  var isWebReady: Bool { webReady }
+
+  /// 容器挂上来时补上它错过的状态。
+  ///
+  /// `eventWebReady` 每次页面加载只发一次，预加载期间发过就不会再来 —— splash 的那一半
+  /// 由容器自己读 `isWebReady` 决定；这里补首屏加载失败的重试页（§9.6）。
+  func onHostAttached(_ host: ShellWebViewHost) {
+    if loadFailed { host.showErrorPage(loadFailedMessage) }
+  }
+
+  /// 页面要重新加载了（reload、重建）：上一个页面留下的状态全部作废。
+  private func onPageReset() {
+    webReady = false
+    stickyWebReady = nil
+    stickyChatOpen = nil
+    loadFailed = false
+    loadFailedMessage = nil
+  }
 
   // ----------------------------------------------------------- HostApi
 
@@ -267,7 +309,7 @@ final class ShellCore {
   func recreateWebView() {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
-      self.webReady = false
+      self.onPageReset()
       self.gate.onPageLoadStarted()
       ImWebViewHolder.shared.recreate(config: self.config)
       self.watchdog.onWebViewRecreated()
@@ -411,6 +453,7 @@ final class ShellCore {
     switch event.name {
     case .webReady:
       webReady = true
+      stickyWebReady = event
       lastWebReadyAtMs = event.receivedAtMs
       // §9.6 收到 eventWebReady 后立即撤 splash，不要用固定时长定时器。
       ImWebViewHolder.shared.host?.dismissSplash(.splashDismissed)
@@ -428,11 +471,14 @@ final class ShellCore {
 
     case .chatOpen:
       gate.onChatOpen(event.chatId)
+      stickyChatOpen = gate.trackedChatId == nil ? nil : event
 
     case .chatClose:
       gate.onChatClose(event.chatId)
+      if gate.trackedChatId == nil { stickyChatOpen = nil }
 
     case .unreadCount:
+      stickyUnread = event
       let count = Int(event.unreadCount ?? 0)
       gate.setBadge(count)
       // §5.4 角标数 = Web 给的未读总数，count 为 0 时清零。
@@ -442,9 +488,12 @@ final class ShellCore {
     // 真正弹窗由 Dart 侧决定时机（宿主可能要先做自己的引导页）。
     case .login:
       loginSeen = true
+      stickyLogin = event
 
     case .logout:
       loginSeen = false
+      stickyLogin = nil
+      stickyChatOpen = nil
       // §5.4 退出登录时 Web 会发 unreadCount=0，这里不额外清，交给那条事件。
 
     default:
@@ -462,7 +511,7 @@ final class ShellCore {
       guard let self else { return }
       // §5.4 页面重新加载时不会发 chatClose，原生在页面开始加载时要清空记住的 chatId。
       self.gate.onPageLoadStarted()
-      self.webReady = false
+      self.onPageReset()
       self.watchdog.onPageStarted()
       self.watchdog.onPageLoadStartedExternally()
       ImWebViewHolder.shared.host?.hideErrorPage()
@@ -476,6 +525,8 @@ final class ShellCore {
   func onMainFrameLoadFailed(url: String, description: String) {
     NSLog("[SsgShell] 首屏加载失败 \(url): \(description)")
     DispatchQueue.main.async { [weak self] in
+      self?.loadFailed = true
+      self?.loadFailedMessage = nil
       ImWebViewHolder.shared.host?.showErrorPage(nil)
       self?.emit(.loadFailed, description, ["url": url])
     }
@@ -483,7 +534,10 @@ final class ShellCore {
 
   func onSslError(_ code: Int) {
     DispatchQueue.main.async { [weak self] in
-      ImWebViewHolder.shared.host?.showErrorPage("安全连接校验失败，请检查网络环境后重试")
+      let message = "安全连接校验失败，请检查网络环境后重试"
+      self?.loadFailed = true
+      self?.loadFailedMessage = message
+      ImWebViewHolder.shared.host?.showErrorPage(message)
       self?.emit(.loadFailed, "SSL 校验失败（code=\(code)）", ["sslError": "\(code)"])
     }
   }
@@ -497,7 +551,7 @@ final class ShellCore {
         crashed ? "WebContent 进程被回收" : "WebContent 进程已结束",
         ["didCrash": "\(crashed)"]
       )
-      self.webReady = false
+      self.onPageReset()
       self.gate.onPageLoadStarted()
       // §7.2 明确要求这里 reload()。reload 不生效的情况由 §11.2.3 的看门狗接手重建。
       if let web = ImWebViewHolder.shared.webView, web.url != nil {
