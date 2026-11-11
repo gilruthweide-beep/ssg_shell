@@ -110,6 +110,16 @@ internal class ShellWebChromeClient : WebChromeClient() {
                 dispose()
                 return true
             }
+
+            // Every WebView in the app shares one render process. When the watchdog terminates it (§11.2.3) while
+            // this probe is alive, the default `false` would take the whole app down with it.
+            override fun onRenderProcessGone(
+                probeView: WebView,
+                detail: android.webkit.RenderProcessGoneDetail,
+            ): Boolean {
+                dispose()
+                return true
+            }
         }
         transport.webView = probe
         resultMsg.sendToTarget()

@@ -248,7 +248,12 @@ internal object ImWebViewHolder {
         contextWrapper?.baseContext = context
     }
 
-    fun detachContext(appContext: Context) {
-        contextWrapper?.baseContext = appContext.applicationContext
+    /**
+     * Restore the application context, but only while [activity] is still the attached one. A container that
+     * finished early can be destroyed after a newer one attached; it must not take the context away from it.
+     */
+    fun detachContext(activity: Context) {
+        val wrapper = contextWrapper ?: return
+        if (wrapper.baseContext === activity) wrapper.baseContext = activity.applicationContext
     }
 }

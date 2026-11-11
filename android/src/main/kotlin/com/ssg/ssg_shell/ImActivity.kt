@@ -234,8 +234,13 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         pendingAudio?.deny()
         pendingAudio = null
         // §10.6 Detach without destroying: recreation reloads the entire Web app, reconnects its socket, and fetches history again.
-        ImWebViewHolder.current()?.let { (it.parent as? ViewGroup)?.removeView(it) }
-        ImWebViewHolder.detachContext(applicationContext)
+        // Only detach what this instance hosts. An instance that redirected to A side finishes before attaching anything,
+        // but the system may destroy it only after a newer ImActivity attached the shared WebView (for example when the
+        // host turns B side on during the same launch); removing the WebView then would leave that container blank.
+        if (::container.isInitialized) {
+            ImWebViewHolder.current()?.takeIf { it.parent === container }?.let { container.removeView(it) }
+        }
+        ImWebViewHolder.detachContext(this)
         super.onDestroy()
     }
 
