@@ -1,5 +1,14 @@
 ## Unreleased
 
+- 并入宿主 App 验证过的本地补丁：
+  - **崩溃修复**：Android `Watchdog` 的带 token 延迟投递改用 `HandlerCompat.postDelayed`。原来的私有扩展函数被 `Handler` 的同名成员方法遮蔽，实际调用的是 API 28 才有的重载，Android 6.0–8.1（minSdk 23）一打开 IM 就抛 `NoSuchMethodError`。
+  - §5.2：启动期补发的身份改为保留最近一次 login **或 logout**（`stickyIdentity`）。Dart 上线前发生的登出也会补调 `OneSignal.logout()`，换号后不再收到上一个账号的推送。Android 上 uid 为空的 login 不算登录，也不解锁通知权限申请。
+  - §5.4：Android 前台抑制要求 IM 容器在运行且 B 面开启，停在 A 面时不会因为 WebView 还停在某个会话而吞掉通知。推送路由日志区分 `openChat` 已暂存和已送达。
+  - §6.2：Dart 登录后把所有未授权的通知状态交给原生一次（每个进程一次），异步调度后重新确认登录态，只有登录用户的原生请求仍未决时才在回前台重试。Android 只在 API 33+ 还能弹系统框时弹，否则（以及用户拒绝后）在 `ImActivity` 上弹「Notifications are off」引导去设置，A 面不弹。
+  - 麦克风引导：iOS 弹窗标题为「Microphone is off」，不会叠在其他弹窗或不可见的控制器上；Android 每次非空的拒绝结果都给去设置入口（Chromium 可能缓存拒绝、不再回调原生），去掉 800 ms 自动拒绝定时器。
+  - iOS：新增 `CjkFontFallback`，在 document-start 为 CJK 区段补本地苹方字体，页面的拉丁字体和图标字体不变；深色 LaunchScreen 盖住 WebView 期间状态栏用浅色内容，撤 splash 后恢复深色。
+  - Android 构建工具对齐 AGP 8.10.1 / Kotlin 2.2.20，兼容 OneSignal 传递依赖带来的 Kotlin 2.2 标准库。
+  - 运行时提示、诊断文本、源码注释、测试名和包描述统一改为英文；Pigeon 生成代码里的文档同步翻译，wire schema 和方法名不变。
 - 对齐新版 §2.1：Android / iOS 原样加载完整落地 URL，渠道码可选；不再补参、重拼 query 或读取独立渠道码配置。
 - 废弃并忽略 Dart 的 `channelCode` 配置，保留旧入参和 Pigeon 消息格式兼容；渠道码迁入 `entryUrl`。
 - 诊断渠道码改为记录 Web 归因事件的实际值；同步示例、原生冷启动配置和渠道归因验收说明。

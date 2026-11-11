@@ -2,27 +2,27 @@ import 'dart:convert';
 
 import 'messages.g.dart';
 
-/// §5.3 把推送 `data` 解析成 [PushMessage]。
+/// §5.3 Parse push `data` into [PushMessage].
 ///
-/// 服务端下发的是：
+/// The server sends:
 ///
 /// ```json
 /// { "chat_id": "1571275627", "msg_id": "8842", "from_id": "1571275627" }
 /// ```
 ///
-/// 但到 Dart 手里的形状取决于 SDK 和平台：OneSignal 的 `additionalData` 是
-/// 已经解开的 map，APNs / FCM 的原始 payload 可能把它裹在 `custom.a` 里，
-/// 数字字段有时是 `String` 有时是 `int`。这里一次性抹平：
+/// The shape received by Dart depends on the SDK and platform: OneSignal's `additionalData`
+/// is already a map, while raw APNs / FCM payloads may wrap business fields in `custom.a`.
+/// Numeric values may be strings or integers. Normalize these variations here:
 ///
-/// - 键名兼容 `chat_id` / `chatId`、`msg_id` / `message_id` / `messageId`、
-///   `from_id` / `fromId`；
-/// - 值一律转成字符串（规范规定过线的 params 全是字符串）；
-/// - 嵌套的 map / list 用 JSON 编码保留，不丢信息。
+/// - Accept `chat_id` / `chatId` and `msg_id` / `message_id` / `messageId` aliases.
+///   `from_id` / `fromId`;
+/// - Convert values to strings, matching the specification's wire parameter contract.
+/// - Preserve nested maps and lists as JSON without losing information.
 PushMessage parsePushData(Map<Object?, Object?>? data) {
   final flat = <String, String>{};
   _flattenInto(data, flat);
 
-  // 原始 APNs / FCM payload：OneSignal 把业务字段放在 custom.a 里。
+  // Raw APNs / FCM payload: OneSignal places business fields in custom.a.
   final custom = flat['custom'];
   if (custom != null && custom.trimLeft().startsWith('{')) {
     final decoded = _tryDecodeMap(custom);
@@ -53,7 +53,7 @@ void _flattenInto(Map<Object?, Object?>? source, Map<String, String> into) {
 String _stringify(Object value) {
   if (value is String) return value;
   if (value is num || value is bool) return value.toString();
-  // 嵌套结构原样保留成 JSON：诊断时还能看到服务端到底发了什么。
+  // Preserve nested data as JSON so diagnostics retain the complete server payload.
   return jsonEncode(value);
 }
 
@@ -66,7 +66,7 @@ Map<String, Object?>? _tryDecodeMap(String raw) {
   }
 }
 
-/// 空串按「没给」算：服务端偶尔会下发空字段，拿它当 chatId 会让 Web 白跳一次。
+/// Treat empty strings as absent; an empty chatId would cause an unnecessary Web navigation attempt.
 String? _pick(Map<String, String> flat, List<String> keys) {
   for (final key in keys) {
     final value = flat[key];

@@ -6,7 +6,7 @@
 	<array/>
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
-		<!-- ShellConfig 把入口地址、壳版本、B 面开关存在 UserDefaults 里，只有本 App 自己读写。 -->
+		<!-- ShellConfig stores the entry URL, shell version, and B side switch in UserDefaults; only this app reads and writes them. -->
 		<dict>
 			<key>NSPrivacyAccessedAPIType</key>
 			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>

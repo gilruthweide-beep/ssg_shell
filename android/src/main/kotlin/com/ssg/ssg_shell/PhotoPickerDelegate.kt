@@ -12,46 +12,46 @@ import androidx.activity.result.contract.ActivityResultContracts.PickMultipleVis
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 
 /**
- * §7.3 文件选择器。
+ * §7.3 Photo picker.
  *
- * 点附件直接进入系统相册，中间不出现任何选择菜单（「文件」「拍照」「录制视频」都不要）。
+ * Open the system photo picker directly without intermediate file, camera, or video-recording menus.
  *
- * 规范点名的三个坑：
- * 1. 不要用 `fileChooserParams.createIntent()` —— 它打开的是文档选择器。
- * 2. `MODE_OPEN_MULTIPLE` 时用多选版本，多选版本里只选一张也能直接确认，
- *    不要求至少选两张；不要限制成只能单选。
- * 3. **用户取消时必须回调 `onReceiveValue(null)`。** 漏了这一步，此后点附件按钮
- *    永久无反应 —— WebView 在等上一次的结果，不会再发起新的请求。
+ * Three pitfalls called out in the specification:
+ * 1. Avoid fileChooserParams.createIntent(), which opens a document picker.
+ * 2. Use the multiple-selection launcher for MODE_OPEN_MULTIPLE. It must also allow confirming a single selection;
+ *    do not require two selections or restrict this mode to one selection.
+ * 3. **Cancellation must call onReceiveValue(null).** Otherwise WebView keeps waiting for the previous result,
+ *    and subsequent attachment taps become permanently unresponsive.
  *
- * 两个 launcher 都在 `onCreate` 里注册：`ActivityResultLauncher` 必须在 Activity
- * 到达 STARTED 之前注册完。
+ * Register both ActivityResultLaunchers in onCreate, before the Activity
+ * reaches STARTED.
  */
 internal class PhotoPickerDelegate(activity: ComponentActivity) {
 
-    /** 同一时刻只会有一个待处理的选择请求（WebView 的约定）。 */
+    /** WebView allows only one pending file selection request at a time. */
     private var pending: ValueCallback<Array<Uri>?>? = null
 
     private val singleLauncher = activity.registerForActivityResult(PickVisualMedia()) { uri ->
-        // 取消时 uri 为 null → 必须回 null，见 §7.3.3。
+        // A null URI on cancellation must produce a null callback result (§7.3.3).
         deliver(if (uri == null) null else arrayOf(uri))
     }
 
     private val multipleLauncher = activity.registerForActivityResult(
         PickMultipleVisualMedia(maxItems()),
     ) { uris ->
-        // 取消时是空列表 → 同样必须回 null。
+        // An empty selection list on cancellation also produces a null callback result.
         deliver(if (uris.isEmpty()) null else uris.toTypedArray())
     }
 
     /**
-     * @return false 表示拉不起来（设备不支持照片选择器），调用方要负责回调 null。
+     * @return False if this device cannot open a photo picker; the caller must return null to WebView.
      */
     fun launch(
         params: WebChromeClient.FileChooserParams,
         callback: ValueCallback<Array<Uri>?>,
     ): Boolean {
-        // 上一次请求还挂着（理论上不会，WebView 会串行）：先把它放掉，
-        // 不然那个 callback 永远不回，附件按钮就死了。
+        // Release any previous pending request first, even though WebView normally serializes them;
+        // leaving a callback unresolved would disable subsequent attachment selections.
         pending?.onReceiveValue(null)
         pending = callback
 
@@ -65,7 +65,7 @@ internal class PhotoPickerDelegate(activity: ComponentActivity) {
             if (multiple) multipleLauncher.launch(request) else singleLauncher.launch(request)
             true
         }.onFailure {
-            Log.e(TAG, "拉起系统照片选择器失败", it)
+            Log.e(TAG, "Unable to open the system photo picker", it)
             pending = null
         }.getOrDefault(false)
     }
@@ -76,20 +76,20 @@ internal class PhotoPickerDelegate(activity: ComponentActivity) {
         callback.onReceiveValue(uris)
     }
 
-    /** Activity 被销毁时放掉挂着的请求，避免 WebView 永久等待。 */
+    /** Release pending requests when the Activity is destroyed so WebView does not wait forever. */
     fun dispose() {
         deliver(null)
     }
 
     /**
-     * §7.3.1 按 `accept` 决定相册里显示什么。
+     * §7.3.1 Filter the photo picker according to `accept`.
      *
-     * - 附件（`acceptTypes` 里图片和视频的通配类型都有）→ 两者在同一个相册里选
-     * - 改头像（只有图片）→ 只显示图片
-     * - 群或私聊限制发送类型时 `accept` 会收窄，照此收窄
+     * - Attachments accepting both image and video types: show both in the same picker.
+     * - Avatar selection accepting only images: show images only.
+     * - Narrower group or private-chat restrictions: apply the supplied accept filter.
      *
-     * Web 侧实际发下来的是具体类型（`image/png,image/jpeg,video/mp4,...`），
-     * 不是通配类型，所以按前缀归类。
+     * The Web application supplies concrete MIME types such as image/png,image/jpeg,video/mp4,
+     * so classify them by prefix rather than requiring wildcard types.
      */
     private fun mediaTypeOf(acceptTypes: Array<String>?): PickVisualMedia.VisualMediaType {
         val types = acceptTypes
@@ -103,7 +103,7 @@ internal class PhotoPickerDelegate(activity: ComponentActivity) {
         val hasImage = types.any { it.startsWith("image/") }
         val hasVideo = types.any { it.startsWith("video/") }
 
-        // 收窄到单一具体类型时，照片选择器能精确过滤。
+        // A single concrete accept type permits exact photo-picker filtering.
         val concrete = types.filterNot { it.endsWith("/*") }
         if (concrete.size == 1 && (hasImage || hasVideo)) {
             return PickVisualMedia.SingleMimeType(concrete.first())
@@ -113,7 +113,7 @@ internal class PhotoPickerDelegate(activity: ComponentActivity) {
             hasImage && hasVideo -> PickVisualMedia.ImageAndVideo
             hasImage -> PickVisualMedia.ImageOnly
             hasVideo -> PickVisualMedia.VideoOnly
-            // accept 里没有图片也没有视频：Web 不发文件（§6.1），按附件默认处理。
+            // If accept contains neither images nor videos, use the attachment default; the Web application does not send documents (§6.1).
             else -> PickVisualMedia.ImageAndVideo
         }
     }
@@ -122,8 +122,8 @@ internal class PhotoPickerDelegate(activity: ComponentActivity) {
         const val TAG = "SsgShell"
 
         /**
-         * §7.3.2 多选上限。`PickMultipleVisualMedia` 要求 > 1，
-         * 且不能超过系统上限，否则直接抛 IllegalArgumentException。
+         * §7.3.2 PickMultipleVisualMedia requires a selection limit greater than one,
+         * and no larger than the system maximum, otherwise it throws IllegalArgumentException.
          */
         fun maxItems(): Int {
             val systemLimit = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

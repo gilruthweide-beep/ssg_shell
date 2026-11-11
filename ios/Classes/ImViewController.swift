@@ -2,11 +2,11 @@ import Foundation
 import UIKit
 import WebKit
 
-/// §8.4 / §9.4 / §9.6 承载 IM WebView 的全屏容器。
+/// §8.4 / §9.4 / §9.6 Fullscreen container for the IM WebView.
 ///
-/// WebView 不属于这个 VC —— 它由 `ImWebViewHolder` 在进程级持有，这里只负责挂上、
-/// 取下，以及那些非得有 VC 才能做的事（`ShellWebViewHost`）：拉相册、弹提示、
-/// 原生 splash、原生重试页。
+/// The process-level ImWebViewHolder owns the WebView; this controller only attaches,
+/// detaches, and provides controller-dependent ShellWebViewHost operations: photo selection, prompts,
+/// native splash, and native retry screens.
 final class ImViewController: UIViewController, ShellWebViewHost {
 
   private let config: ShellConfig
@@ -22,19 +22,19 @@ final class ImViewController: UIViewController, ShellWebViewHost {
     self.config = config
     super.init(nibName: nil, bundle: nil)
     modalPresentationStyle = .fullScreen
-    // §9.6 冷启动直接进 Web，不要任何转场动画露出下面的 Flutter 页。
+    // §9.6 Enter the Web application on cold starts without transition animations exposing the Flutter page underneath.
     modalTransitionStyle = .crossDissolve
   }
 
   required init?(coder: NSCoder) {
-    fatalError("init(coder:) 没用到")
+    fatalError("init(coder:) is not supported")
   }
 
-  // ----------------------------------------------------------------- 生命周期
+  // ----------------------------------------------------------------- Lifecycle
 
   override func viewDidLoad() {
     super.viewDidLoad()
-    // §9.4 安全区外露出的状态栏 / 底部条一律白色背景。
+    // §9.4 Use a white background for the status bar and bottom safe area.
     view.backgroundColor = UIColor(argb: config.backgroundColorArgb)
 
     attach(ImWebViewHolder.shared.get(config: config))
@@ -42,24 +42,24 @@ final class ImViewController: UIViewController, ShellWebViewHost {
     ImWebViewHolder.shared.refreshUserAgent()
 
     if ShellCore.shared.isWebReady {
-      // eventWebReady 每次页面加载只发一次。WebView 是预加载的、或者这是关掉后重新打开的
-      // 容器，那一条早就发过了，不会再来 —— 这时再盖 splash 就只能干等到上限。
+      // eventWebReady fires only once per page load. If the WebView was preloaded, or this is a container reopened after being
+      // closed, that event was sent long ago and will not come again; covering it with the splash now would just wait until the limit.
       splashUp = false
     } else {
       installSplash()
     }
-    // 预加载阶段首屏就加载失败的话，那时没有容器，重试页现在补上。
+    // If the initial page failed to load during preload, there was no container then; show the retry page now.
     ShellCore.shared.onHostAttached(self)
 
     if config.entryUrl.isEmpty {
-      showErrorPage("入口地址未配置（§2.1）")
+      showErrorPage("Landing URL is not configured (§2.1)")
     }
   }
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
     ImWebViewHolder.shared.host = self
-    // §10.2 WebView 真的可见了：ShellCore 据此调 onForeground() 并启动心跳。
+    // §10.2 The WebView is actually visible; ShellCore calls onForeground() and starts heartbeats.
     ShellCore.shared.setImRunning(true)
   }
 
@@ -69,34 +69,43 @@ final class ImViewController: UIViewController, ShellWebViewHost {
   }
 
   deinit {
-    // `host` 是弱引用，走到这里时已经自动置空了；不为空说明新的容器已经接手。
+    // `host` is a weak reference and has already been set to nil by the time we get here; if it is not nil, a new container has taken over.
     let replaced = ImWebViewHolder.shared.host != nil
     if !replaced {
       ImWebViewHolder.shared.filePicker.dispose()
     }
-    // §10.6 只取下，不销毁：重建 WebView = 重新加载整个 Web = 重建长连接 + 重拉历史。
-    // 只取自己挂着的那一个 —— 关掉后立刻重开时，WebView 可能已经挂到新容器上了。
+    // §10.6 Only detach, do not destroy: recreating the WebView = reloading the whole Web = re-establishing the long connection + refetching history.
+    // Only detach the one this container holds; when reopened right after closing, the WebView may already be attached to the new container.
     if isViewLoaded, let web = ImWebViewHolder.shared.webView, web.superview === view {
       web.removeFromSuperview()
     }
   }
 
-  /// §9.4 状态栏用深色图标（白底）。登录页、深色模式下也一样，不按页面颜色取色。
-  override var preferredStatusBarStyle: UIStatusBarStyle { .darkContent }
+  /// Use icons contrasting with the splash, then dark icons on the white Web safe area as required by §9.4.
+  override var preferredStatusBarStyle: UIStatusBarStyle {
+    if splashUp, let background = splashView?.backgroundColor {
+      var red: CGFloat = 1, green: CGFloat = 1, blue: CGFloat = 1, alpha: CGFloat = 1
+      if background.getRed(&red, green: &green, blue: &blue, alpha: &alpha),
+         0.2126 * red + 0.7152 * green + 0.0722 * blue < 0.5 {
+        return .lightContent
+      }
+    }
+    return .darkContent
+  }
 
   override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { [] }
 
-  /// 页面自己管朝向，这里不限制；旋转不会重建 VC，所以 §10.6 的长活不受影响。
+  /// Let the page manage orientation. Rotation does not recreate this controller or affect §10.6 instance lifetime.
   override var shouldAutorotate: Bool { true }
 
-  // ----------------------------------------------------------------- 挂载
+  // ----------------------------------------------------------------- Attachment
 
-  /// §9.4 **WebView 只放在安全区内**：由原生把它摆在状态栏 / 刘海 / 灵动岛以下、
-  /// Home 指示条以上。Web 在壳内只按 `env(safe-area-inset-*)` 留白，所以那几个值
-  /// 必须为 0 —— 约束到 `safeAreaLayoutGuide` 正好满足。
+  /// §9.4 **Place the WebView inside the safe area**, below the status bar, notch, or Dynamic Island
+  /// and above the home indicator. The Web application uses env(safe-area-inset-*) for padding inside the shell,
+  /// so those values must be zero; safeAreaLayoutGuide constraints provide that layout.
   ///
-  /// §9.2 键盘由 Web 处理：这里不做 frame 偏移，也不动 `contentInset`，
-  /// 原生再改一次就会叠加成两倍位移。
+  /// §9.2 The Web application handles keyboard movement; avoid native frame offsets or contentInset changes,
+  /// which would double the displacement.
   private func attach(_ webView: WKWebView) {
     guard webView.superview !== view else { return }
     webView.removeFromSuperview()
@@ -112,10 +121,10 @@ final class ImViewController: UIViewController, ShellWebViewHost {
 
   // ----------------------------------------------------------------- splash
 
-  /// §9.6 用来遮住 WebView 加载期间的白屏，画面与系统启动图一致 ——
-  /// 直接把 LaunchScreen 实例化出来，两者衔接起来就是同一个启动画面。
+  /// §9.6 Cover the loading WebView with a view matching the system launch screen;
+  /// instantiate LaunchScreen directly for a continuous visual transition.
   ///
-  /// 除此之外不允许出现任何加载界面：没有转圈、没有进度条、没有「正在连接」。
+  /// Do not add other loading UI: no spinner, progress bar, or connecting message.
   private func installSplash() {
     let splash: UIView
     if let launch = Self.launchScreenView() {
@@ -134,12 +143,13 @@ final class ImViewController: UIViewController, ShellWebViewHost {
       splash.trailingAnchor.constraint(equalTo: view.trailingAnchor),
     ])
     splashView = splash
+    setNeedsStatusBarAppearanceUpdate()
 
-    // §9.6 `eventWebReady` 可能永远不来（内核过低的不兼容提示页、脚本加载失败的重试页），
-    // 所以给一个上限，到时撤掉让用户看到页面或原生重试页。
+    // §9.6 eventWebReady may never arrive on an unsupported engine or script-loading error page,
+    // so cap splash duration and then reveal the page or native retry screen.
     let deadline = DispatchWorkItem { [weak self] in
       guard let self, self.splashUp else { return }
-      NSLog("[SsgShell] splash 到达 \(Int(self.config.splashTimeout))s 上限，强制撤除（§9.6）")
+      NSLog("[SsgShell] Splash reached its \(Int(self.config.splashTimeout))s limit; removing it (§9.6)")
       self.dismissSplash(.splashTimedOut)
     }
     splashDeadline = deadline
@@ -152,17 +162,18 @@ final class ImViewController: UIViewController, ShellWebViewHost {
     else { return nil }
     let storyboard = UIStoryboard(name: name, bundle: .main)
     guard let controller = storyboard.instantiateInitialViewController() else { return nil }
-    // 只要它的视图，VC 本身不进层级 —— 它不需要生命周期。
+    // Use only the launch controller's view; it does not need controller lifecycle or containment.
     let snapshot = controller.view
     snapshot?.frame = UIScreen.main.bounds
     return snapshot
   }
 
-  /// §9.6 收到 `eventWebReady` 后立即撤 splash，此时首屏已经画好 ——
-  /// 不要用固定时长定时器。
+  /// §9.6 Remove the splash as soon as eventWebReady arrives, when the first screen has already rendered;
+  /// do not use a fixed-duration timer.
   func dismissSplash(_ reason: ShellEventType) {
     guard splashUp else { return }
     splashUp = false
+    setNeedsStatusBarAppearanceUpdate()
     splashDeadline?.cancel()
     splashDeadline = nil
     ShellCore.shared.notifySplashDismissed(reason)
@@ -175,12 +186,12 @@ final class ImViewController: UIViewController, ShellWebViewHost {
     )
   }
 
-  // --------------------------------------------------------------- 错误页
+  // --------------------------------------------------------------- Error screen
 
-  /// §9.6 首屏加载失败接管为原生重试页，不要露出 WKWebView 的默认错误页面。
+  /// §9.6 Replace initial-load failures with a native retry screen rather than WKWebView's default error page.
   func showErrorPage(_ message: String?) {
     if errorView != nil {
-      errorBody?.text = message ?? "请检查网络后重试"
+      errorBody?.text = message ?? "Check your connection and try again."
       return
     }
     let page = buildErrorPage(message)
@@ -193,7 +204,7 @@ final class ImViewController: UIViewController, ShellWebViewHost {
       page.trailingAnchor.constraint(equalTo: view.trailingAnchor),
     ])
     errorView = page
-    // 错误页顶上来之后 splash 就该撤了，不然用户只看到启动图，不知道发生了什么。
+    // Remove the splash when displaying an error page so the user can see what happened.
     dismissSplash(.loadFailed)
   }
 
@@ -208,13 +219,13 @@ final class ImViewController: UIViewController, ShellWebViewHost {
     container.backgroundColor = UIColor(argb: config.backgroundColorArgb)
 
     let title = UILabel()
-    title.text = "暂时打不开"
+    title.text = "Unable to load"
     title.font = .systemFont(ofSize: 18, weight: .medium)
     title.textColor = UIColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1)
     title.textAlignment = .center
 
     let body = UILabel()
-    body.text = message ?? "请检查网络后重试"
+    body.text = message ?? "Check your connection and try again."
     body.font = .systemFont(ofSize: 14)
     body.textColor = UIColor(red: 0.54, green: 0.54, blue: 0.56, alpha: 1)
     body.textAlignment = .center
@@ -222,7 +233,7 @@ final class ImViewController: UIViewController, ShellWebViewHost {
     errorBody = body
 
     let retry = UIButton(type: .system)
-    retry.setTitle("重试", for: .normal)
+    retry.setTitle("Try again", for: .normal)
     retry.titleLabel?.font = .systemFont(ofSize: 16, weight: .medium)
     retry.addTarget(self, action: #selector(onRetry), for: .touchUpInside)
 
@@ -243,7 +254,7 @@ final class ImViewController: UIViewController, ShellWebViewHost {
 
   @objc private func onRetry() {
     hideErrorPage()
-    // §8.3 资源加载失败时的兜底只做 reload，不要顺手清缓存。
+    // §8.3 Retry resource-loading failures by reloading only; preserve caches.
     let holder = ImWebViewHolder.shared
     if let web = holder.webView, web.url != nil {
       web.reload()
@@ -254,8 +265,8 @@ final class ImViewController: UIViewController, ShellWebViewHost {
 
   // ------------------------------------------------- ShellWebViewHost
 
-  /// §7.3 拉相册、弹提示都从这里 present。已经有东西盖在上面时交给它，
-  /// 不然 present 会被 UIKit 丢掉。
+  /// §7.3 Present photo selection and prompts through the topmost controller;
+  /// otherwise UIKit may discard the presentation request.
   var presenter: UIViewController? {
     var top: UIViewController = self
     while let presented = top.presentedViewController, !presented.isBeingDismissed {
@@ -264,7 +275,7 @@ final class ImViewController: UIViewController, ShellWebViewHost {
     return top
   }
 
-  /// §11.2.3 WebView 实例被换掉，重新挂上新实例。
+  /// §11.2.3 Reattach the replacement WebView after recreation.
   func onWebViewReplaced(_ webView: WKWebView) {
     hideErrorPage()
     attach(webView)

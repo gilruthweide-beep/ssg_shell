@@ -14,13 +14,13 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 
 /**
- * §7.1 `WebViewClient` 回调。
+ * §7.1 `WebViewClient` callbacks.
  *
- * 这里每一项不实现都表现为某个功能「点了没反应」，而 Web 侧看不到任何错误。
+ * Missing callbacks leave features unresponsive without exposing errors to the Web application.
  */
 internal class ShellWebViewClient(
     private val config: ShellConfig,
-    /** §1.2 极老内核上 `addDocumentStartJavaScript` 不可用时的兜底脚本。 */
+    /** §1.2 Fallback script for old engines without addDocumentStartJavaScript. */
     private val fallbackInjection: String?,
 ) : WebViewClient() {
 
@@ -28,11 +28,11 @@ internal class ShellWebViewClient(
 
     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
         super.onPageStarted(view, url, favicon)
-        // §11.2.3 reload 是否真的生效，就看有没有走到这里。
+        // §11.2.3 Reaching this callback confirms that reload actually started loading.
         ShellCore.onPageStarted(url)
         val script = fallbackInjection
         if (script != null) {
-            // 与首个 bundle 有竞态，只是比什么都没有好，见 §1.2 / §1.4。
+            // This fallback still races the first bundle and is only better than no injection; see §1.2 / §1.4.
             runCatching { view.evaluateJavascript(script, null) }
         }
     }
@@ -43,15 +43,15 @@ internal class ShellWebViewClient(
     }
 
     /**
-     * §7.1 外链、`tel:`、`mailto:` 交给系统；不实现的话外链在 WebView 里打开，用户出不来。
+     * §7.1 Delegate external links, `tel:`, and `mailto:` to the system instead of trapping navigation inside the WebView.
      *
-     * 同源 HTTPS 必须**原样放行**，不做改写、重定向或拦截。
-     * `blob:` / `data:` 的导航不是外链，不要拦 —— 那是 Web 预览媒体的通道。
+     * Allow same-origin HTTPS URLs unchanged, without rewriting, redirecting, or intercepting them.
+     * `blob:` / `data:` navigations support Web media previews and must not be treated as external links.
      */
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
         handleNavigation(request.url)
 
-    @Deprecated("API 23 以下的旧签名，保留以兼容老设备")
+    @Deprecated("Legacy pre-API-23 signature retained for older-device compatibility")
     @Suppress("DEPRECATION")
     override fun shouldOverrideUrlLoading(view: WebView, url: String?): Boolean =
         handleNavigation(url?.let { runCatching { Uri.parse(it) }.getOrNull() })
@@ -60,18 +60,18 @@ internal class ShellWebViewClient(
         if (uri == null) return false
         val scheme = uri.scheme?.lowercase().orEmpty()
         return when {
-            // Web 预览媒体的通道，拦了图片视频就打不开。
+            // Allow the Web media-preview channel so photos and videos can open.
             scheme in PASS_THROUGH_SCHEMES -> false
             scheme == "http" || scheme == "https" -> {
                 if (isInternal(uri)) {
-                    false // 同源，原样放行。
+                    false // Same origin; allow unchanged.
                 } else {
                     ImWebViewHolder.host?.openExternal(uri.toString()) ?: false
                 }
             }
-            // tel:、mailto:、intent:、市场链接等，一律交给系统。
-            // 系统里没有应用能接时也不能放给 WebView：它加载不了这些协议，主框架会报
-            // ERR_UNKNOWN_URL_SCHEME，原生重试页就盖到整个 IM 上了。
+            // tel:, mailto:, intent:, app store links, etc. all go to the system.
+            // Even when no app can handle them, do not pass them to the WebView: it cannot load these schemes, the main frame would report
+            // ERR_UNKNOWN_URL_SCHEME, and the native retry page would cover the entire IM.
             else -> {
                 ImWebViewHolder.host?.openExternal(uri.toString())
                 true
@@ -81,18 +81,18 @@ internal class ShellWebViewClient(
 
     private fun isInternal(uri: Uri): Boolean {
         val host = uri.host?.lowercase() ?: return false
-        val entry = entryHost?.lowercase() ?: return true // 配置缺失时一律放行，别把自己挡在外面
+        val entry = entryHost?.lowercase() ?: return true // Allow navigation when configuration is unavailable to avoid blocking the application.
         return host == entry || host.endsWith(".$entry")
     }
 
-    /** §7.1 首屏加载失败 → 原生重试页，不要停在 WebView 默认错误页。 */
+    /** §7.1 Replace initial-load failures with a native retry screen instead of default WebView error UI. */
     override fun onReceivedError(
         view: WebView,
         request: WebResourceRequest,
         error: WebResourceError,
     ) {
         super.onReceivedError(view, request, error)
-        if (!request.isForMainFrame) return // 子资源失败由 Web 自己兜，不要弹错误页
+        if (!request.isForMainFrame) return // Let the Web application handle subresource failures without covering the page.
         val description = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             "${error.errorCode} ${error.description}"
         } else {
@@ -115,8 +115,8 @@ internal class ShellWebViewClient(
     }
 
     /**
-     * §9.6 SSL 错误不要无脑 `proceed()`，也不要静默 `cancel()` 停在白屏，
-     * 要给用户可见提示。
+     * §9.6 Do not blindly `proceed()` on SSL errors or silently `cancel()` into a blank page;
+     * show an error the user can act on.
      */
     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
         handler.cancel()
@@ -124,15 +124,15 @@ internal class ShellWebViewClient(
     }
 
     /**
-     * §7.1 渲染进程被回收或被主动结束（§11.2.3 的 `terminate()`）。
+     * §7.1 The renderer was reclaimed or explicitly terminated under §11.2.3.
      *
-     * 旧实例已不可用，不能对它 `reload()`：必须销毁旧 WebView、新建一个加载入口地址。
-     * 返回 `false` 会连带杀掉 App，所以无论如何都返回 `true`。
+     * The old WebView is unusable: destroy it and create a new one loading the landing URL instead of calling `reload()`.
+     * Return `true` in all cases; returning `false` would also terminate the application.
      */
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail?): Boolean {
         val crashed = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             detail?.didCrash() == true
-        Log.w(TAG, "onRenderProcessGone(didCrash=$crashed)，销毁旧实例并重建（§7.1）")
+        Log.w(TAG, "onRenderProcessGone(didCrash=$crashed); destroy the old instance and recreate it (§7.1)")
         ShellCore.onRenderProcessGone(crashed)
         return true
     }

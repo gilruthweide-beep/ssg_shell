@@ -1,15 +1,16 @@
 #
-# 马甲包原生壳（iOS）。接口由 Pigeon 生成，条款编号对应 docs/马甲包对接规范.md。
-# 改完用 `pod lib lint ssg_shell.podspec` 过一遍。
+# Native application shell for iOS. Pigeon generates the interface; section numbers refer to the shell integration specification.
+# Validate changes with `pod lib lint ssg_shell.podspec`.
 #
 Pod::Spec.new do |s|
   s.name             = 'ssg_shell'
   s.version          = '1.0.2'
-  s.summary          = '马甲包原生壳：容器注入、事件通道、OneSignal 深链、假死防护。'
+  s.summary          = 'Native IM shell with container injection, event bridging, OneSignal deep links, and liveness recovery.'
   s.description      = <<-DESC
-App = 原生壳 + WebView 加载 IM Web。壳负责容器注入（§1）、URL 与 UA（§2）、
-事件通道（§3 / §4）、推送深链（§5）、权限时机（§6）、WKWebView 回调（§7）、
-运行环境（§8）、交互与启动（§9）、保活与假死防护（§10 / §11）。
+The application combines a native shell with a WebView hosting the IM Web application.
+The shell provides container injection (§1), URL and user-agent handling (§2), event bridging (§3 / §4),
+push deep links (§5), permission timing (§6), WKWebView callbacks (§7), runtime configuration (§8),
+navigation and startup (§9), and connection liveness and recovery (§10 / §11).
                        DESC
   s.homepage         = 'https://example.com/ssg-shell'
   s.license          = { :file => '../LICENSE' }
@@ -17,8 +18,8 @@ App = 原生壳 + WebView 加载 IM Web。壳负责容器注入（§1）、URL �
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
   s.dependency 'Flutter'
-  # §7.3 PHPickerViewController 要 iOS 14；同一版本起才有
-  # WKScriptMessageHandlerWithReply（分块把文件交回页面要用）。
+  # §7.3 PHPickerViewController requires iOS 14, as does
+  # WKScriptMessageHandlerWithReply, used to return selected files to the page in chunks.
   s.platform = :ios, '14.0'
   s.frameworks = 'WebKit', 'PhotosUI', 'Photos', 'AVFoundation', 'Network', 'UserNotifications', 'ImageIO', 'UniformTypeIdentifiers'
 

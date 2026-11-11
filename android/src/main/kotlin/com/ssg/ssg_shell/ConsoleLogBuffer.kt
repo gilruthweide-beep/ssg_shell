@@ -6,10 +6,10 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * §11.6 console 环形缓冲。
+ * §11.6 Console ring buffer.
  *
- * 诊断入口要能「查看并导出最近 N 条 console」，所以日志不能只进 logcat ——
- * 线上设备拿不到 logcat。容量满了丢最旧的。
+ * Diagnostics must display and export the most recent N console entries; logcat alone is insufficient
+ * on production devices without logcat access. Evict the oldest entry at capacity.
  */
 internal class ConsoleLogBuffer(@Volatile var capacity: Int = 300) {
 
@@ -24,7 +24,7 @@ internal class ConsoleLogBuffer(@Volatile var capacity: Int = 300) {
 
     fun clear() = synchronized(records) { records.clear() }
 
-    /** §11.6 导出用的纯文本。 */
+    /** §11.6 Plain-text format for exports. */
     fun dump(): String = snapshot().joinToString("\n") { r ->
         val where = r.source?.let { s -> "$s:${r.line ?: 0}" } ?: "-"
         "${FORMAT.format(Date(r.atMs))} [${r.level.name.lowercase(Locale.ROOT)}] $where ${r.message}"

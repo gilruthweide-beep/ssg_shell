@@ -1,6 +1,6 @@
-# §8.4 体验与性能 4
-# jsBridge.postMessage 只被 JS 调用。没有这条规则，release 包里 R8 会把它
-# 混淆或直接删掉，§3.1 的十个事件全部丢失，debug 包测不出来。
+# §8.4 Performance 4.
+# Only JavaScript calls jsBridge.postMessage. Without this rule, R8 may rename or remove it
+# in release builds, losing all ten §3.1 events while debug builds still work.
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }

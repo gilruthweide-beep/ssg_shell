@@ -4,22 +4,22 @@ import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// §7.3 文件选择器（iOS）。
+/// §7.3 iOS photo picker.
 ///
-/// WKWebView 自带的处理会先弹「照片图库 / 拍照或录像 / 选取文件」菜单，且没有公开接口
-/// 去掉，所以附件选择由壳接管：document-start 的脚本拦住 `<input type="file">`
-/// （见 `ShellInjection.fileInputScript`），这里用系统照片选择器
-/// `PHPickerViewController` 顶上。只用公开 API，不 hook WebKit 私有类。
+/// WKWebView normally shows an intermediate photo library / camera / file menu with no public API to remove it.
+/// The shell therefore intercepts <input type="file"> at document start
+/// through ShellInjection.fileInputScript and presents the system photo picker,
+/// PHPickerViewController. Use public APIs only, without hooking private WebKit classes.
 ///
-/// 三条规范硬要求：
-/// 1. `PHPicker` 不需要相册权限 —— 不要先申请相册权限，也不要换成需要权限的自建相册。
-/// 2. 格式：GIF 保持原样，其他图片（HEIC、HEIF…）一律转成 JPEG；视频保留原始 mov / mp4。
-/// 3. 传输：视频可能几百 MB，**不能**整个转 base64 一次性交给页面 —— 按块读，
-///    每块 base64 后不超过 2 MB，由页面逐块拉取后拼成 `Blob`。
+/// Three mandatory requirements:
+/// 1. PHPicker does not require library permission; do not request it or substitute a custom library requiring access.
+/// 2. Preserve GIFs, convert other images (HEIC, HEIF, etc.) to JPEG, and retain original mov / mp4 video files.
+/// 3. Videos may be hundreds of MB; **do not send the entire file as base64 at once**. Read chunks,
+///    at most 2 MB after base64 encoding, for the page to assemble into a Blob.
 final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
 
-  /// 暂存到磁盘的一个文件。`loadFileRepresentation` 回调里的临时文件在回调结束后会被
-  /// 删除，所以必须先复制出来（§7.3.3）。
+  /// A file staged on disk. loadFileRepresentation removes its temporary file when the callback returns,
+  /// so copy it into the staging directory first (§7.3.3).
   private struct StagedFile {
     let url: URL
     let name: String
@@ -28,33 +28,33 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
     let stagedAt: Date
   }
 
-  /// §7.3.4 每块 base64 后不超过 2 MB：原始 1_440_000 字节（能被 3 整除，base64 不带
-  /// 填充断口）编码后正好 1_920_000 个字符。
+  /// §7.3.4 Each encoded chunk must stay below 2 MB. A raw chunk of 1,440,000 bytes is divisible by three,
+  /// avoids base64 padding boundaries, and produces exactly 1,920,000 encoded characters.
   private static let rawChunkSize = 1_440_000
 
   weak var host: ShellWebViewHost?
 
-  /// 把清单交回页面（`window.__ssgFileBridge.deliver`）。
+  /// Return the file manifest through window.__ssgFileBridge.deliver.
   var deliver: ((String, [[String: Any]]) -> Void)?
 
   private var pendingRequestId: String?
   private var staged: [String: StagedFile] = [:]
   private let lock = NSLock()
 
-  // --------------------------------------------------------------- 拉起相册
+  // --------------------------------------------------------------- Opening the photo picker
 
-  /// §7.3 点附件直接进入系统相册，中间不出现任何选择菜单。
+  /// §7.3 Open the system photo picker directly on attachment taps without intermediate menus.
   func present(requestId: String, accept: String, multiple: Bool) {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       guard let presenter = self.host?.presenter else {
-        // 没有容器挂载时拉不起来。请求直接作废，页面那边的 pending 已经清掉了，
-        // 下次点附件还能再来（§7.3.5）。
-        NSLog("[SsgShell] 没有可用的容器，照片选择器拉不起来")
+        // Without an attached container, discard the request. The page already cleared its pending state,
+        // so the next attachment tap can try again (§7.3.5).
+        NSLog("[SsgShell] No container is available to present the photo picker")
         self.deliver?(requestId, [])
         return
       }
-      // 上一次请求还挂着（理论上不会，页面是串行的）：先把它作废。
+      // Discard any previous pending request first, although the page normally serializes requests.
       if let previous = self.pendingRequestId, previous != requestId {
         self.deliver?(previous, [])
       }
@@ -63,7 +63,7 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
 
       var configuration = PHPickerConfiguration()
       configuration.filter = Self.filter(for: accept)
-      // §7.3.2 多选时不限张数（选一张也能直接确认），改头像时为 1。
+      // §7.3.2 Multiple-selection mode has no app-imposed count limit and accepts a single selection; avatars allow one image.
       configuration.selectionLimit = multiple ? 0 : 1
       configuration.preferredAssetRepresentationMode = .current
 
@@ -74,8 +74,8 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
     }
   }
 
-  /// §7.3.1 `filter` 按 `accept` 决定：同时有图片和视频时两者都显示；只有图片时只显示
-  /// 图片；群或私聊限制发送类型时 `accept` 会收窄，照此收窄。
+  /// §7.3.1 Filter by accept: show both images and videos when both are accepted, or images only
+  /// when appropriate; honor narrower group or private-chat MIME restrictions.
   static func filter(for accept: String) -> PHPickerFilter {
     let types = accept
       .split(separator: ",")
@@ -90,7 +90,7 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
     case (true, true): return .any(of: [.images, .videos])
     case (true, false): return .images
     case (false, true): return .videos
-    // accept 里没有图片也没有视频：Web 不发文件（§6.1），按附件默认处理。
+    // If accept contains neither images nor videos, use the attachment default; the Web application does not send documents (§6.1).
     case (false, false): return .any(of: [.images, .videos])
     }
   }
@@ -102,16 +102,16 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
     guard let requestId = pendingRequestId else { return }
     pendingRequestId = nil
 
-    // §7.3.5 用户取消时不派发事件，下一次点附件要能再次拉起。
+    // §7.3.5 Do not dispatch selection events on cancellation; the next attachment tap must work again.
     guard !results.isEmpty else {
       deliver?(requestId, [])
       return
     }
 
     let group = DispatchGroup()
-    // 结果要保持用户选择的顺序，所以先占位再按下标填。
-    // `loadFileRepresentation` 的回调各自落在不同的后台线程上，多选时会同时回来，
-    // 这两个变量的读写都要过 `lock`。
+    // Results must keep the user's selection order, so reserve slots first and fill them by index.
+    // `loadFileRepresentation` callbacks each land on a different background thread and come back concurrently for multiple selections,
+    // so all reads and writes of these two variables must go through `lock`.
     var manifest = [[String: Any]?](repeating: nil, count: results.count)
     var failures = 0
 
@@ -148,20 +148,20 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
       let failed = failures
       self.lock.unlock()
       self.deliver?(requestId, files)
-      // §7.3.4「不要静默丢弃用户选中的文件」：真的有取不到的，明确告诉用户。
+      // §7.3.4 "Do not silently drop files the user selected": if some truly cannot be read, tell the user explicitly.
       if failed > 0 {
-        self.warn("有 \(failed) 个文件读取失败，请重试或换一个文件")
+        self.warn("\(failed) file(s) could not be read. Try again or choose a different file.")
       }
     }
   }
 
-  // --------------------------------------------------------------- 落盘与转码
+  // --------------------------------------------------------------- Staging and transcoding
 
-  /// §7.3.3 取文件并按格式要求处理，复制到自己的暂存目录。
+  /// §7.3.3 Load files, apply format requirements, and copy them into the application's staging directory.
   private func stage(_ provider: NSItemProvider, completion: @escaping (StagedFile?) -> Void) {
     let suggested = provider.suggestedName ?? "file"
 
-    // GIF 保持原样 —— 转成 JPEG 会丢掉动画。
+    // Preserve GIFs; converting them to JPEG would remove animation.
     if provider.hasItemConformingToTypeIdentifier(UTType.gif.identifier) {
       copyFileRepresentation(
         provider,
@@ -173,12 +173,12 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
       return
     }
 
-    // 视频：取 UTType.movie，保留原始 mov 或 mp4。
+    // Video: request UTType.movie and retain the original mov or mp4.
     if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
       provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { [weak self] url, error in
         guard let self else { return completion(nil) }
         guard let url else {
-          NSLog("[SsgShell] 取视频失败：\(error?.localizedDescription ?? "unknown")")
+          NSLog("[SsgShell] Unable to load video:\(error?.localizedDescription ?? "unknown")")
           return completion(nil)
         }
         let ext = url.pathExtension.isEmpty ? "mp4" : url.pathExtension.lowercased()
@@ -188,8 +188,8 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
       return
     }
 
-    // 其他图片（HEIC、HEIF、PNG…）：交给页面的类型必须是 image/jpeg。
-    // 系统能直接给 JPEG 表示时用它，给不了再用 ImageIO 解码后重新编码。
+    // Other images (HEIC, HEIF, PNG, etc.) must reach the page as image/jpeg.
+    // Prefer a system-provided JPEG representation; otherwise decode and re-encode with ImageIO.
     if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
       provider.loadFileRepresentation(forTypeIdentifier: UTType.jpeg.identifier) { [weak self] url, _ in
         guard let self else { return completion(nil) }
@@ -199,7 +199,7 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
         }
         provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, error in
           guard let url else {
-            NSLog("[SsgShell] 取图片失败：\(error?.localizedDescription ?? "unknown")")
+            NSLog("[SsgShell] Unable to load image:\(error?.localizedDescription ?? "unknown")")
             return completion(nil)
           }
           completion(self.transcodeToJpeg(url, name: Self.filename(suggested, ext: "jpg")))
@@ -208,8 +208,8 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
       return
     }
 
-    // Web 只收 png、jpeg、gif、mp4、mov（§7.3），别的本来也会被拒收。
-    NSLog("[SsgShell] 选中的项目既不是图片也不是视频，跳过")
+    // The Web application accepts only png, jpeg, gif, mp4, and mov (§7.3); other formats would be rejected.
+    NSLog("[SsgShell] Selected item is neither an image nor a video; skipping")
     completion(nil)
   }
 
@@ -222,14 +222,14 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
   ) {
     provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { [weak self] url, error in
       guard let self, let url else {
-        NSLog("[SsgShell] 取文件失败：\(error?.localizedDescription ?? "unknown")")
+        NSLog("[SsgShell] Unable to load file:\(error?.localizedDescription ?? "unknown")")
         return completion(nil)
       }
       completion(self.copy(url, name: name, mime: mime))
     }
   }
 
-  /// `loadFileRepresentation` 的回调一结束，那个临时文件就会被删掉，必须先复制出来。
+  /// Copy the temporary loadFileRepresentation file before its callback returns and the file is removed.
   private func copy(_ source: URL, name: String, mime: String) -> StagedFile? {
     do {
       let target = try Self.stagingDirectory().appendingPathComponent(
@@ -239,15 +239,15 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
       let size = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int) ?? 0
       return StagedFile(url: target, name: name, mime: mime, size: size ?? 0, stagedAt: Date())
     } catch {
-      NSLog("[SsgShell] 暂存文件失败：\(error.localizedDescription)")
+      NSLog("[SsgShell] Unable to stage file:\(error.localizedDescription)")
       return nil
     }
   }
 
-  /// HEIC / HEIF 之类系统没给 JPEG 表示时的兜底：ImageIO 解码后重新编码。
+  /// Use ImageIO decoding and re-encoding when the system cannot provide JPEG for HEIC / HEIF or similar inputs.
   private func transcodeToJpeg(_ source: URL, name: String) -> StagedFile? {
     guard let imageSource = CGImageSourceCreateWithURL(source as CFURL, nil) else {
-      NSLog("[SsgShell] ImageIO 读不出图片，放弃")
+      NSLog("[SsgShell] ImageIO could not decode the image; skipping")
       return nil
     }
     do {
@@ -269,20 +269,20 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
         [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary
       )
       guard CGImageDestinationFinalize(destination) else {
-        NSLog("[SsgShell] 重新编码 JPEG 失败")
+        NSLog("[SsgShell] JPEG re-encoding failed")
         return nil
       }
       let size = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int) ?? 0
       return StagedFile(url: target, name: name, mime: "image/jpeg", size: size ?? 0, stagedAt: Date())
     } catch {
-      NSLog("[SsgShell] 转码落盘失败：\(error.localizedDescription)")
+      NSLog("[SsgShell] Unable to save transcoded file:\(error.localizedDescription)")
       return nil
     }
   }
 
-  // ------------------------------------------------------------- 分块交付
+  // ------------------------------------------------------------- Chunk delivery
 
-  /// §7.3.4 页面按块来拉。返回 base64 字符串。
+  /// §7.3.4 The page requests individual chunks; return a base64 string.
   func chunk(token: String, index: Int) throws -> String {
     lock.lock()
     let file = staged[token]
@@ -291,7 +291,7 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
       throw NSError(
         domain: "ssg_shell",
         code: 404,
-        userInfo: [NSLocalizedDescriptionKey: "文件已失效，请重新选择"]
+        userInfo: [NSLocalizedDescriptionKey: "This file is no longer available. Please select it again."]
       )
     }
     let offset = UInt64(index) * UInt64(Self.rawChunkSize)
@@ -304,7 +304,7 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
     return data.base64EncodedString()
   }
 
-  /// 容器销毁时放掉挂着的请求，避免页面那边永远等。
+  /// Release pending requests on container destruction so the page does not wait forever.
   func dispose() {
     if let requestId = pendingRequestId {
       pendingRequestId = nil
@@ -312,18 +312,18 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
     }
   }
 
-  // ----------------------------------------------------------------- 杂项
+  // ----------------------------------------------------------------- Utilities
 
   private func warn(_ message: String) {
     guard let presenter = host?.presenter else { return }
     let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
-    alert.addAction(UIAlertAction(title: "好", style: .default))
+    alert.addAction(UIAlertAction(title: "OK", style: .default))
     presenter.present(alert, animated: true)
   }
 
   private static func filename(_ suggested: String, ext: String) -> String {
-    // §7.3.4 带上原文件名，不要用临时文件名。
-    // 同一个串还要当暂存文件名用，所以把路径分隔符换掉 —— 相册给的名字里偶尔带它们。
+    // §7.3.4 Preserve the original filename instead of exposing a temporary filename.
+    // Also use this value for staging, replacing any path separators in filenames supplied by the photo library.
     let base = (suggested as NSString).deletingPathExtension
       .components(separatedBy: CharacterSet(charactersIn: "/\\:"))
       .joined(separator: "_")
@@ -339,8 +339,8 @@ final class FilePickerBridge: NSObject, PHPickerViewControllerDelegate {
     return directory
   }
 
-  /// 页面拉完块之后没有「用完了」的信号，所以按时间清：下一次拉起选择器时，
-  /// 把超过 10 分钟的暂存文件删掉。
+  /// The page does not send a completion signal after fetching chunks. Clean up by age when opening
+  /// the next picker, removing staged files older than ten minutes.
   private func purgeStale() {
     let deadline = Date().addingTimeInterval(-600)
     lock.lock()

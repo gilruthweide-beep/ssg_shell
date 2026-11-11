@@ -6,19 +6,19 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
 
-/** §11.2.5 / §12.4「退避」：持续卡死时第一次处理后隔 180 秒再处理，之后隔 600 秒。 */
+/** §11.2.5 / §12.4 "Backoff": during a persistent stall, handle again 180 seconds after the first handling, then every 600 seconds. */
 class RecoveryBackoffTest {
 
     private val backoff = RecoveryBackoff({ 180_000L }, { 600_000L })
 
     @Test
-    fun `第一次卡死立刻处理`() {
+    fun `first stall is handled immediately`() {
         assertEquals(Decision.Recover(attempt = 1, backoffMs = 180_000), backoff.onStall(0))
         assertTrue(backoff.awaitingAlive)
     }
 
     @Test
-    fun `页面一直没恢复时 180 秒后再处理 之后每 600 秒一次`() {
+    fun `when the page never recovers handle again after 180 seconds then every 600 seconds`() {
         backoff.onStall(0)
 
         assertTrue(backoff.onStall(179_999) is Decision.Throttled)
@@ -32,13 +32,13 @@ class RecoveryBackoffTest {
     }
 
     @Test
-    fun `退避窗口内只报告一次`() {
+    fun `reports only once within a backoff window`() {
         backoff.onStall(0)
 
         assertEquals(Decision.Throttled(waitMs = 175_000, firstReport = true), backoff.onStall(5_000))
         assertEquals(Decision.Throttled(waitMs = 170_000, firstReport = false), backoff.onStall(10_000))
 
-        // 下一个窗口重新报告一次。
+        // The next window reports once again.
         backoff.onStall(180_000)
         assertEquals(
             Decision.Throttled(waitMs = 595_000, firstReport = true),
@@ -46,9 +46,9 @@ class RecoveryBackoffTest {
         )
     }
 
-    /** §12.4 的验收流程：重建后的页面先发了 alive，随后又被卡死。 */
+    /** The §12.4 acceptance sequence: the recreated page sends alive, then hangs again. */
     @Test
-    fun `重建后页面发过 alive 又卡死 仍然要等满退避窗口`() {
+    fun `a rebuilt page that sent alive and hangs again still waits out the window`() {
         backoff.onStall(0)
 
         assertTrue(backoff.onAlive(5_000))
@@ -59,7 +59,7 @@ class RecoveryBackoffTest {
     }
 
     @Test
-    fun `页面撑过整个窗口后还活着 下一次卡死按第一次算`() {
+    fun `a page still alive after the whole window resets so the next stall counts as the first`() {
         backoff.onStall(0)
         backoff.onAlive(5_000)
         backoff.onAlive(180_000)
@@ -68,7 +68,7 @@ class RecoveryBackoffTest {
     }
 
     @Test
-    fun `没在等恢复时 onAlive 返回 false`() {
+    fun `onAlive returns false when not awaiting recovery`() {
         assertFalse(backoff.onAlive(0))
 
         backoff.onStall(1_000)

@@ -4,16 +4,16 @@ import android.content.Context
 import android.os.Build
 import androidx.webkit.WebViewCompat
 
-/** §1.1 / §11.5 组装注入对象和 UA 后缀。 */
+/** §1.1 / §11.5 Build the injected object and user-agent suffix. */
 internal object ShellInjection {
 
-    /** §1.1 六个必填字段。缺 `platform` 视为注入无效，缺 `bundleId` 收不到推送。 */
+    /** §1.1 Six required fields. Missing platform invalidates injection; missing bundleId prevents push routing. */
     fun shellInfo(context: Context, shellVersion: String): ShellInfo = ShellInfo(
         platform = ShellPlatform.ANDROID,
         bundleId = context.applicationContext.packageName,
         shellVersion = shellVersion,
         webviewVersion = webViewVersionName(context),
-        // §11.5 假死集中在特定厂商的省电策略上，没这两个字段没法按机型定位。
+        // §11.5 Device and OS fields help identify vendor-specific power-saving behavior behind unresponsive connections.
         deviceModel = Build.MODEL.orEmpty(),
         osVersion = Build.VERSION.RELEASE.orEmpty(),
     )
@@ -27,9 +27,9 @@ internal object ShellInjection {
     }.getOrNull().orEmpty()
 
     /**
-     * §1.2 注入脚本。必须用 `addDocumentStartJavaScript` 执行：
-     * Web 侧有一组常量在模块加载那一刻求值，晚于首个 bundle 就无效，
-     * `onPageStarted` 里的 `evaluateJavascript` 和首个 bundle 存在竞态，不接受。
+     * §1.2 Injection script. Execute with `addDocumentStartJavaScript`:
+     * the Web application evaluates constants when its modules load, so injection after the first bundle is too late.
+     * `evaluateJavascript` in `onPageStarted` races the first bundle and does not meet the contract.
      */
     fun buildScript(info: ShellInfo): String = buildString {
         append("window.__SSG_SHELL__={")
@@ -43,8 +43,8 @@ internal object ShellInjection {
     }
 
     /**
-     * §2.2 UA 后缀。必须**追加**，不能整段替换 —— Web 与服务端都有按 UA 判平台的逻辑
-     * （`Android`、`iPhone`、`iPad`），替换会让平台识别全面失效。
+     * §2.2 **Append** the user-agent suffix; do not replace the original agent. The Web and server detect platforms
+     * from tokens such as `Android`, `iPhone`, and `iPad`, which a replacement agent could remove.
      */
     fun userAgentSuffix(shellVersion: String): String = " SSGShell/$shellVersion Android"
 

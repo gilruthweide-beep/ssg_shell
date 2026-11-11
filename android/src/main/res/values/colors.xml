@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- §9.4 首屏颜色。宿主覆盖同名资源即可换色，但规范要求白色。 -->
+    <!-- §9.4 Initial-screen background. Hosts may override this resource, but the specification requires white. -->
     <color name="ssg_shell_surface">#FFFFFFFF</color>
 </resources>

@@ -6,19 +6,19 @@ import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 
 /**
- * Pigeon 契约的 Android 实现入口。
+ * Android implementation of the Pigeon contract.
  *
- * 这里只做转发：真正的状态全在 [ShellCore]（进程级单例）。原因见 §8.4 体验与性能 2 ——
- * `ImActivity` 可以是冷启动的第一个 Activity，那时 Flutter 引擎还没起来，而 §11.1 的心跳、
- * §11.2 的存活监测必须已经在跑。插件被 detach（引擎销毁）也不能停掉这些。
+ * This layer only forwards calls; [ShellCore], a process singleton, owns the state. Under §8.4 Performance 2,
+ * `ImActivity` can be the first cold-start Activity before Flutter starts, while the §11.1 heartbeat
+ * and §11.2 liveness monitor must already be active. Plugin detachment must not stop them.
  */
 class SsgShellPlugin : FlutterPlugin, ActivityAware, SsgShellHostApi {
 
     companion object {
         /**
-         * `ImActivity` 当冷启动第一个 Activity 时，插件会起一个无界面引擎跑 Dart
-         * （见 [ShellCore.ensureDartEngine]），并以这个 id 放进 `FlutterEngineCache`。
-         * 宿主的 FlutterActivity 覆盖 `getCachedEngineId()` 返回它即可复用。
+         * When `ImActivity` is the first Activity on cold start, the plugin starts a headless engine to run Dart
+         * (see [ShellCore.ensureDartEngine]) and puts it into `FlutterEngineCache` under this id.
+         * The host's FlutterActivity can reuse it by overriding `getCachedEngineId()` to return this id.
          */
         const val ENGINE_ID = "ssg_shell"
     }
@@ -26,13 +26,13 @@ class SsgShellPlugin : FlutterPlugin, ActivityAware, SsgShellHostApi {
     private lateinit var appContext: Context
     private var binding: ActivityPluginBinding? = null
 
-    /** 这个引擎自己的 Dart 回调通道。 */
+    /** This engine's own Dart callback channel. */
     private var flutterApi: SsgShellFlutterApi? = null
 
-    /** Dart 上线前错过的状态类事件只在它第一次 `initialize()` 时补发，之后都是实时的。 */
+    /** Stateful events missed before Dart came online are replayed only on its first `initialize()`; after that everything is real-time. */
     private var stickyReplayed = false
 
-    /** §6.2 通知权限的系统回调，转给 [PermissionCoordinator]。 */
+    /** §6.2 System callback for the notification permission, forwarded to [PermissionCoordinator]. */
     private val permissionListener =
         io.flutter.plugin.common.PluginRegistry.RequestPermissionsResultListener {
                 requestCode, permissions, grantResults ->
@@ -46,7 +46,7 @@ class SsgShellPlugin : FlutterPlugin, ActivityAware, SsgShellHostApi {
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
-        // 正常情况下 androidx.startup 已经装配过了，这里只兜宿主把 provider 去掉的情况。
+        // Normally androidx.startup already initialized the shell; this handles hosts that removed its provider.
         ShellStartupInitializer.ensure(appContext)
         SsgShellHostApi.setUp(binding.binaryMessenger, this)
         flutterApi = SsgShellFlutterApi(binding.binaryMessenger).also(ShellCore::addDartApi)
@@ -54,7 +54,7 @@ class SsgShellPlugin : FlutterPlugin, ActivityAware, SsgShellHostApi {
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         SsgShellHostApi.setUp(binding.binaryMessenger, null)
-        // 引擎没了就不要再往它那边发事件，但壳本身继续跑（§8.4 体验与性能 2）。
+        // Once the engine is gone, stop sending events to it, but the shell itself keeps running (§8.4 Performance 2).
         flutterApi?.let(ShellCore::removeDartApi)
         flutterApi = null
         stickyReplayed = false
@@ -79,7 +79,7 @@ class SsgShellPlugin : FlutterPlugin, ActivityAware, SsgShellHostApi {
 
     override fun initialize(config: ShellConfigDto): ShellInfo {
         val info = ShellCore.initialize(config)
-        // 调到这里说明 Dart 已经挂好了接收端。补发要赶在返回值之前发出去。
+        // Reaching here means Dart has attached its receiver. The replay must go out before the return value.
         if (!stickyReplayed) {
             stickyReplayed = true
             flutterApi?.let(ShellCore::replaySticky)

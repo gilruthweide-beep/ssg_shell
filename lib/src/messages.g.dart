@@ -15,7 +15,11 @@ PlatformException _createConnectionError(String channelName) {
   );
 }
 
-List<Object?> wrapResponse({Object? result, PlatformException? error, bool empty = false}) {
+List<Object?> wrapResponse({
+  Object? result,
+  PlatformException? error,
+  bool empty = false,
+}) {
   if (empty) {
     return <Object?>[];
   }
@@ -24,39 +28,34 @@ List<Object?> wrapResponse({Object? result, PlatformException? error, bool empty
   }
   return <Object?>[error.code, error.message, error.details];
 }
+
 bool _deepEquals(Object? a, Object? b) {
   if (a is List && b is List) {
     return a.length == b.length &&
-        a.indexed
-        .every(((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]));
+        a.indexed.every(
+          ((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]),
+        );
   }
   if (a is Map && b is Map) {
-    return a.length == b.length && a.entries.every((MapEntry<Object?, Object?> entry) =>
-        (b as Map<Object?, Object?>).containsKey(entry.key) &&
-        _deepEquals(entry.value, b[entry.key]));
+    return a.length == b.length &&
+        a.entries.every(
+          (MapEntry<Object?, Object?> entry) =>
+              (b as Map<Object?, Object?>).containsKey(entry.key) &&
+              _deepEquals(entry.value, b[entry.key]),
+        );
   }
   return a == b;
 }
 
+/// §1.1 Accepted values for `platform`.
+enum ShellPlatform { android, ios }
 
-/// §1.1 `platform`，只接受这两个取值。
-enum ShellPlatform {
-  android,
-  ios,
-}
+/// §4 Values for `onNetwork(type)`. `none` is not forwarded to the Web application because it would be ignored;
+/// it is retained to represent the full native network state.
+enum NetworkType { wifi, cellular, ethernet, other, none }
 
-/// §4 `onNetwork(type)` 的取值。`none` 不会转发给 Web（会被忽略），
-/// 保留它只是为了让原生侧的网络状态可以完整表达。
-enum NetworkType {
-  wifi,
-  cellular,
-  ethernet,
-  other,
-  none,
-}
-
-/// §3.1 的十个事件。`unknown` 用于 Web 将来新增事件时的前向兼容：
-/// 原始字符串仍然保留在 [WebEvent.rawName] 里。
+/// §3.1 Ten Web events. `unknown` allows forward compatibility when the Web application adds new events:
+/// the original string remains available in [WebEvent.rawName].
 enum WebEventName {
   webReady,
   register,
@@ -71,16 +70,10 @@ enum WebEventName {
   unknown,
 }
 
-/// §11.6 console 转发的级别。
-enum ConsoleLevel {
-  debug,
-  log,
-  info,
-  warning,
-  error,
-}
+/// §11.6 Levels used when forwarding console output.
+enum ConsoleLevel { debug, log, info, warning, error }
 
-/// §6.2 通知权限。`permanentlyDenied` 时要走 §6.2 的二次引导。
+/// §6.2 Notification permission. `permanentlyDenied` requires the settings guidance described in §6.2.
 enum NotificationPermission {
   notDetermined,
   granted,
@@ -89,56 +82,68 @@ enum NotificationPermission {
   notSupported,
 }
 
-/// §8.1 / §11.7 内核版本判定。
-enum KernelVerdict {
-  ok,
-  belowRecommended,
-  belowMinimum,
-  unknown,
-}
+/// §8.1 / §11.7 WebView engine compatibility status.
+enum KernelVerdict { ok, belowRecommended, belowMinimum, unknown }
 
-/// 原生侧发生的事情，由 [SsgShellFlutterApi.onShellEvent] 上抛给 Dart。
+/// Native events forwarded to Dart through [SsgShellFlutterApi.onShellEvent].
 enum ShellEventType {
-  /// §4 `onForeground()` 已调用。
+  /// §4 `onForeground()` was called.
   foreground,
-  /// §4 `onBackground()` 已调用。
+
+  /// §4 `onBackground()` was called.
   background,
-  /// §10.4 去抖之后、确认网络可用才发；`network` 字段带类型。
+
+  /// §10.4 Sent after debouncing and confirming network availability; `network` contains the connection type.
   networkChanged,
-  /// §11.4 已向 Web 转发 `onMemoryWarning()`。
+
+  /// §11.4 `onMemoryWarning()` was forwarded to the Web application.
   memoryWarning,
-  /// §9.6 收到 `eventWebReady`，splash 已撤。
+
+  /// §9.6 `eventWebReady` arrived and the splash was removed.
   splashDismissed,
-  /// §9.6 splash 到达上限（默认 30 秒）被强制撤除。
+
+  /// §9.6 The splash reached its maximum duration (30 seconds by default) and was removed.
   splashTimedOut,
-  /// §9.6 首屏加载失败，已切到原生重试页。
+
+  /// §9.6 Initial page loading failed and the native retry screen was shown.
   loadFailed,
-  /// §7.1 `onRenderProcessGone` / `webViewWebContentProcessDidTerminate`。
+
+  /// §7.1 `onRenderProcessGone` / `webViewWebContentProcessDidTerminate`.
   renderProcessGone,
-  /// §11.2 判定卡死。
+
+  /// §11.2 The page was identified as unresponsive.
   stallDetected,
-  /// §11.2 已执行 `reload()`。
+
+  /// §11.2 `reload()` was executed.
   reloadIssued,
-  /// §11.2 reload 无效，已销毁重建 WebView。
+
+  /// §11.2 Reload did not recover the page, so the WebView was destroyed and recreated.
   webViewRecreated,
-  /// §11.2.5 处于退避窗口内，本次卡死不处理。
+
+  /// §11.2.5 Recovery was skipped because the backoff window is active.
   recoveryThrottled,
-  /// IM 容器已显示。
+
+  /// The IM container is visible.
   imOpened,
-  /// IM 容器已关闭 / 退到后台。
+
+  /// The IM container was closed or moved to the background.
   imClosed,
-  /// §11.6 Web 的一条 console 输出。
+
+  /// §11.6 A Web console entry.
   consoleMessage,
-  /// §1.3 注入自检结果；`extra['isWebBrowser']` 为 `'false'` 才算通过。
+
+  /// §1.3 Injection check result; only `extra['isWebBrowser'] == 'false'` passes.
   injectionChecked,
-  /// §5.3 深链已交给 Web（`extra['chatId']`）。
+
+  /// §5.3 A deep link was delivered to the Web application (`extra['chatId']`).
   deepLinkDelivered,
-  /// §5.3 深链被暂存，等 `eventWebReady`。
+
+  /// §5.3 A deep link is queued until `eventWebReady`.
   deepLinkQueued,
 }
 
-/// 壳的全部可调参数。默认值在 Dart 侧的 `ShellConfig` 工厂里给，
-/// 原生侧只负责照单执行。
+/// All configurable shell parameters. Defaults are supplied by the Dart `ShellConfig` factory;
+/// native code uses those values directly.
 class ShellConfigDto {
   ShellConfigDto({
     required this.entryUrl,
@@ -162,69 +167,69 @@ class ShellConfigDto {
     required this.webViewFullscreen,
   });
 
-  /// §2.1 原样加载的完整落地 URL，可包含可选的 `channelcode` 查询参数。
+  /// §2.1 Complete landing URL, loaded unchanged, with an optional `channelcode` query parameter.
   String entryUrl;
 
-  /// 旧版消息格式的兼容字段，已忽略；渠道码只通过入口 URL 传入。
+  /// Ignored legacy wire field; channel attribution is supplied only through the landing URL.
   String channelCode;
 
-  /// §1.1 / §2.2 壳版本，同时进 `__SSG_SHELL__` 和 UA。
+  /// §1.1 / §2.2 Shell version used in `__SSG_SHELL__` and the user agent.
   String shellVersion;
 
-  /// §9.6 B 面开关。原生会把它缓存到本地，下次冷启动不等 Dart。
+  /// §9.6 B-side switch, cached natively so the next cold start does not wait for Dart.
   bool bSideEnabled;
 
-  /// §9.6 splash 上限，建议 30000。
+  /// §9.6 Maximum splash duration; recommended value: 30000.
   int splashTimeoutMs;
 
-  /// §11.1 原生心跳周期，规范值 20000。
+  /// §11.1 Native heartbeat interval; required value: 20000.
   int heartbeatIntervalMs;
 
-  /// §11.2 多久没收到 `eventWebAlive` 判定卡死，规范值 60000。
+  /// §11.2 Timeout without `eventWebAlive` before declaring the page unresponsive; required value: 60000.
   int aliveTimeoutMs;
 
-  /// §11.2.3 reload 后多久没开始加载就重建，规范值 10000。
+  /// §11.2.3 Timeout after reload without loading before recreation; required value: 10000.
   int reloadConfirmTimeoutMs;
 
-  /// §11.2.5 第一次处理后的退避，规范值 180000。
+  /// §11.2.5 Initial recovery backoff; required value: 180000.
   int recoveryBackoffFirstMs;
 
-  /// §11.2.5 之后的退避，规范值 600000。
+  /// §11.2.5 Subsequent recovery backoff; required value: 600000.
   int recoveryBackoffLaterMs;
 
-  /// §10.4 网络回调去抖，规范区间 1000~2000。
+  /// §10.4 Network callback debounce interval; required range: 1000–2000.
   int networkDebounceMs;
 
-  /// §5.4 前台抑制开关。
+  /// §5.4 Enable foreground notification suppression.
   bool suppressForegroundNotifications;
 
-  /// §5.4 是否由插件按 `unreadCount` 设角标。
+  /// §5.4 Let the plugin update the badge from `unreadCount`.
   bool manageBadge;
 
-  /// §8.1 硬性下限，92。
+  /// §8.1 Minimum supported engine version: 92.
   int minKernelVersion;
 
-  /// §8.1 推荐值，110。
+  /// §8.1 Recommended engine version: 110.
   int recommendedKernelVersion;
 
-  /// §11.6 console 环形缓冲条数。
+  /// §11.6 Console ring buffer capacity.
   int consoleBufferSize;
 
-  /// §8.4 / §9.4 WebView 与窗口背景色，规范要求白色 0xFFFFFFFF。
+  /// §8.4 / §9.4 WebView and window background; required color: white, 0xFFFFFFFF.
   int backgroundColorArgb;
 
-  /// §11.6 是否把 Web 的 console 转发到原生日志与 Dart。
+  /// §11.6 Forward Web console output to native logs and Dart.
   bool forwardConsole;
 
-  /// WebView 铺满整个窗口，不摆进安全区。
+  /// Allow the WebView to fill the window instead of placing it within the safe area.
   ///
-  /// **这是对 §9.4 的偏离**，默认关。规范要求原生把 WebView 摆在状态栏 / 刘海 / 灵动岛
-  /// 以下、Home 指示条（Android 为导航栏）以上，页面里读 `env(safe-area-inset-*)` 必须
-  /// 为 0 —— §12.2 的「安全区」自测就是看这个。打开它之后那一项不再成立，页面要自己
-  /// 按 `env()` 留白。
+  /// **Deviates from §9.4 and is disabled by default.** The specification places the WebView below the status bar, notch,
+  /// or Dynamic Island and above the home indicator (navigation bar on Android). The page must read zero
+  /// for `env(safe-area-inset-*)`, as checked by the §12.2 safe-area test. When enabled, the page must
+  /// apply its own padding using `env()`.
   ///
-  /// 键盘不受影响：打开它时原生仍然消费 ime 的 inset（§9.2 要求输入框紧贴键盘、
-  /// 完整可见），只是不再消费 systemBars 和 displayCutout。
+  /// Keyboard behavior is unchanged: native code still consumes IME insets to keep the input visible above the keyboard (§9.2),
+  /// but it no longer consumes systemBars and displayCutout insets.
   bool webViewFullscreen;
 
   List<Object?> _toList() {
@@ -252,7 +257,8 @@ class ShellConfigDto {
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static ShellConfigDto decode(Object result) {
     result as List<Object?>;
@@ -293,11 +299,10 @@ class ShellConfigDto {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
-/// §1.1 实际注入到 `window.__SSG_SHELL__` 的六个字段。
+/// §1.1 The six fields injected into `window.__SSG_SHELL__`.
 class ShellInfo {
   ShellInfo({
     required this.platform,
@@ -332,7 +337,8 @@ class ShellInfo {
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static ShellInfo decode(Object result) {
     result as List<Object?>;
@@ -360,14 +366,13 @@ class ShellInfo {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
-/// §3.1 一条 Web → Native 事件。
+/// §3.1 A Web → Native event.
 ///
-/// 规范规定 params 全是字符串，所以原始内容完整保留在 [params] 里；
-/// 常用字段额外做了类型化，避免每个调用点自己解析。
+/// The specification requires string parameters, so [params] retains the complete original values;
+/// common fields also have typed accessors to avoid repeated parsing at call sites.
 class WebEvent {
   WebEvent({
     required this.name,
@@ -383,13 +388,13 @@ class WebEvent {
 
   WebEventName name;
 
-  /// Web 原样发来的 `eventName`。
+  /// The original `eventName` from the Web application.
   String rawName;
 
-  /// 原生收到的时刻（原生时钟，毫秒）。
+  /// Native reception time in milliseconds, measured by the native clock.
   int receivedAtMs;
 
-  /// 原样的 `params`。
+  /// The original `params`.
   Map<String, String> params;
 
   String? uid;
@@ -398,10 +403,10 @@ class WebEvent {
 
   String? chatId;
 
-  /// `unreadCount` 事件的 `count`，已解析成数字。
+  /// The parsed numeric `count` from an `unreadCount` event.
   int? unreadCount;
 
-  /// Web 给的 `timestamp`（字符串，可能不是数字）。
+  /// The Web-supplied `timestamp` string, which may not be numeric.
   String? webTimestamp;
 
   List<Object?> _toList() {
@@ -419,7 +424,8 @@ class WebEvent {
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static WebEvent decode(Object result) {
     result as List<Object?>;
@@ -450,32 +456,26 @@ class WebEvent {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
-/// §5.3 打开会话。
+/// §5.3 Open a conversation.
 class OpenChatRequest {
-  OpenChatRequest({
-    required this.chatId,
-    this.messageId,
-  });
+  OpenChatRequest({required this.chatId, this.messageId});
 
-  /// 字符串形式：私聊为对方 uid，群和频道为负数 id。
+  /// String identifier: the peer uid for private chats, or a negative id for groups and channels.
   String chatId;
 
-  /// 可省略；省略时只打开会话，不定位消息。
+  /// Optional; omit to open the conversation without locating a specific message.
   String? messageId;
 
   List<Object?> _toList() {
-    return <Object?>[
-      chatId,
-      messageId,
-    ];
+    return <Object?>[chatId, messageId];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static OpenChatRequest decode(Object result) {
     result as List<Object?>;
@@ -499,19 +499,13 @@ class OpenChatRequest {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
-/// §5.3 OneSignal 下发的 `data`。字段名兼容 `chat_id` / `chatId` 两种写法，
-/// 解析在 Dart 侧的 `parsePushData()` 里做（`lib/src/push.dart`）。
+/// §5.3 OneSignal `data`, accepting both `chat_id` and `chatId` field names.
+/// Parsed by Dart's `parsePushData()` in `lib/src/push.dart`.
 class PushMessage {
-  PushMessage({
-    this.chatId,
-    this.messageId,
-    this.fromId,
-    required this.data,
-  });
+  PushMessage({this.chatId, this.messageId, this.fromId, required this.data});
 
   String? chatId;
 
@@ -522,16 +516,12 @@ class PushMessage {
   Map<String, String> data;
 
   List<Object?> _toList() {
-    return <Object?>[
-      chatId,
-      messageId,
-      fromId,
-      data,
-    ];
+    return <Object?>[chatId, messageId, fromId, data];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static PushMessage decode(Object result) {
     result as List<Object?>;
@@ -557,11 +547,10 @@ class PushMessage {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
-/// [SsgShellHostApi.handlePushReceived] 的结果。
+/// The result of [SsgShellHostApi.handlePushReceived].
 class PushDecision {
   PushDecision({
     required this.suppressNotification,
@@ -570,28 +559,24 @@ class PushDecision {
     required this.reason,
   });
 
-  /// §5.4 true 表示用户正停在这个会话里，不要展示系统通知。
+  /// §5.4 True when the user is viewing this conversation and the system notification should be suppressed.
   bool suppressNotification;
 
-  /// §11.3 true 表示已调过一次 `onNetwork()` 把 Web 捅醒。
+  /// §11.3 True when `onNetwork()` was called to wake the Web connection.
   bool nudgedWeb;
 
   bool appInForeground;
 
-  /// 给日志用的人类可读理由。
+  /// Human-readable reason for logging.
   String reason;
 
   List<Object?> _toList() {
-    return <Object?>[
-      suppressNotification,
-      nudgedWeb,
-      appInForeground,
-      reason,
-    ];
+    return <Object?>[suppressNotification, nudgedWeb, appInForeground, reason];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static PushDecision decode(Object result) {
     result as List<Object?>;
@@ -617,11 +602,10 @@ class PushDecision {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
-/// §8.1 / §11.7 内核信息。
+/// §8.1 / §11.7 WebView engine information.
 class KernelInfo {
   KernelInfo({
     required this.verdict,
@@ -632,26 +616,22 @@ class KernelInfo {
 
   KernelVerdict verdict;
 
-  /// 完整版本号，如 `120.0.6099.230`；取不到时为空串。
+  /// Full version string, such as `120.0.6099.230`; empty when unavailable.
   String versionName;
 
-  /// 主版本号，取不到时为 -1。
+  /// Major version, or -1 when unavailable.
   int majorVersion;
 
-  /// Android 为 WebView 实现包名（`com.google.android.webview` 等）；iOS 为空串。
+  /// Android WebView implementation package, such as `com.google.android.webview`; empty on iOS.
   String packageName;
 
   List<Object?> _toList() {
-    return <Object?>[
-      verdict,
-      versionName,
-      majorVersion,
-      packageName,
-    ];
+    return <Object?>[verdict, versionName, majorVersion, packageName];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static KernelInfo decode(Object result) {
     result as List<Object?>;
@@ -677,11 +657,10 @@ class KernelInfo {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
-/// §11.6 一条 console 记录。
+/// §11.6 A console entry.
 class ConsoleRecord {
   ConsoleRecord({
     required this.level,
@@ -702,17 +681,12 @@ class ConsoleRecord {
   int? line;
 
   List<Object?> _toList() {
-    return <Object?>[
-      level,
-      message,
-      atMs,
-      source,
-      line,
-    ];
+    return <Object?>[level, message, atMs, source, line];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static ConsoleRecord decode(Object result) {
     result as List<Object?>;
@@ -739,11 +713,10 @@ class ConsoleRecord {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
-/// §11.6 隐藏诊断入口要展示 / 导出的全部内容。
+/// §11.6 Complete contents displayed or exported by the hidden diagnostics screen.
 class ShellDiagnostics {
   ShellDiagnostics({
     required this.shellInfo,
@@ -773,12 +746,12 @@ class ShellDiagnostics {
 
   String userAgent;
 
-  /// 最近一次 Web 注册、登录或发消息事件携带的渠道码。
+  /// Channel code from the most recent Web registration, login, or message-sent event.
   ///
-  /// 为空表示尚未收到归因事件或 Web 未提供渠道码；渠道归因是可选的。
+  /// Empty when no attribution event or channel code is available; attribution is optional.
   String channelCode;
 
-  /// §1.3 自检：`document.documentElement.classList.contains('is-web-browser') === false`。
+  /// §1.3 Injection check: `document.documentElement.classList.contains('is-web-browser') === false`.
   bool injectionOk;
 
   bool imRunning;
@@ -789,12 +762,12 @@ class ShellDiagnostics {
 
   int recreateCount;
 
-  /// §5.4 当前角标数。
+  /// §5.4 Current badge count.
   int badgeCount;
 
   KernelInfo kernel;
 
-  /// §11.6 最近 N 条 console。
+  /// §11.6 Most recent N console entries.
   List<ConsoleRecord> consoleTail;
 
   int? lastReloadAtMs;
@@ -803,7 +776,7 @@ class ShellDiagnostics {
 
   int? lastWebAliveAtMs;
 
-  /// §5.4 原生记住的最近一次 `chatOpen` 的 chatId。
+  /// §5.4 The most recent `chatOpen` chatId remembered by native code.
   String? trackedChatId;
 
   List<Object?> _toList() {
@@ -829,7 +802,8 @@ class ShellDiagnostics {
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static ShellDiagnostics decode(Object result) {
     result as List<Object?>;
@@ -868,11 +842,10 @@ class ShellDiagnostics {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
 
-/// 原生侧事件。
+/// A native event.
 class ShellEvent {
   ShellEvent({
     required this.type,
@@ -896,18 +869,12 @@ class ShellEvent {
   ConsoleRecord? console;
 
   List<Object?> _toList() {
-    return <Object?>[
-      type,
-      atMs,
-      extra,
-      message,
-      network,
-      console,
-    ];
+    return <Object?>[type, atMs, extra, message, network, console];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static ShellEvent decode(Object result) {
     result as List<Object?>;
@@ -935,10 +902,8 @@ class ShellEvent {
 
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
-  int get hashCode => Object.hashAll(_toList())
-;
+  int get hashCode => Object.hashAll(_toList());
 }
-
 
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
@@ -947,55 +912,55 @@ class _PigeonCodec extends StandardMessageCodec {
     if (value is int) {
       buffer.putUint8(4);
       buffer.putInt64(value);
-    }    else if (value is ShellPlatform) {
+    } else if (value is ShellPlatform) {
       buffer.putUint8(129);
       writeValue(buffer, value.index);
-    }    else if (value is NetworkType) {
+    } else if (value is NetworkType) {
       buffer.putUint8(130);
       writeValue(buffer, value.index);
-    }    else if (value is WebEventName) {
+    } else if (value is WebEventName) {
       buffer.putUint8(131);
       writeValue(buffer, value.index);
-    }    else if (value is ConsoleLevel) {
+    } else if (value is ConsoleLevel) {
       buffer.putUint8(132);
       writeValue(buffer, value.index);
-    }    else if (value is NotificationPermission) {
+    } else if (value is NotificationPermission) {
       buffer.putUint8(133);
       writeValue(buffer, value.index);
-    }    else if (value is KernelVerdict) {
+    } else if (value is KernelVerdict) {
       buffer.putUint8(134);
       writeValue(buffer, value.index);
-    }    else if (value is ShellEventType) {
+    } else if (value is ShellEventType) {
       buffer.putUint8(135);
       writeValue(buffer, value.index);
-    }    else if (value is ShellConfigDto) {
+    } else if (value is ShellConfigDto) {
       buffer.putUint8(136);
       writeValue(buffer, value.encode());
-    }    else if (value is ShellInfo) {
+    } else if (value is ShellInfo) {
       buffer.putUint8(137);
       writeValue(buffer, value.encode());
-    }    else if (value is WebEvent) {
+    } else if (value is WebEvent) {
       buffer.putUint8(138);
       writeValue(buffer, value.encode());
-    }    else if (value is OpenChatRequest) {
+    } else if (value is OpenChatRequest) {
       buffer.putUint8(139);
       writeValue(buffer, value.encode());
-    }    else if (value is PushMessage) {
+    } else if (value is PushMessage) {
       buffer.putUint8(140);
       writeValue(buffer, value.encode());
-    }    else if (value is PushDecision) {
+    } else if (value is PushDecision) {
       buffer.putUint8(141);
       writeValue(buffer, value.encode());
-    }    else if (value is KernelInfo) {
+    } else if (value is KernelInfo) {
       buffer.putUint8(142);
       writeValue(buffer, value.encode());
-    }    else if (value is ConsoleRecord) {
+    } else if (value is ConsoleRecord) {
       buffer.putUint8(143);
       writeValue(buffer, value.encode());
-    }    else if (value is ShellDiagnostics) {
+    } else if (value is ShellDiagnostics) {
       buffer.putUint8(144);
       writeValue(buffer, value.encode());
-    }    else if (value is ShellEvent) {
+    } else if (value is ShellEvent) {
       buffer.putUint8(145);
       writeValue(buffer, value.encode());
     } else {
@@ -1006,46 +971,46 @@ class _PigeonCodec extends StandardMessageCodec {
   @override
   Object? readValueOfType(int type, ReadBuffer buffer) {
     switch (type) {
-      case 129: 
+      case 129:
         final int? value = readValue(buffer) as int?;
         return value == null ? null : ShellPlatform.values[value];
-      case 130: 
+      case 130:
         final int? value = readValue(buffer) as int?;
         return value == null ? null : NetworkType.values[value];
-      case 131: 
+      case 131:
         final int? value = readValue(buffer) as int?;
         return value == null ? null : WebEventName.values[value];
-      case 132: 
+      case 132:
         final int? value = readValue(buffer) as int?;
         return value == null ? null : ConsoleLevel.values[value];
-      case 133: 
+      case 133:
         final int? value = readValue(buffer) as int?;
         return value == null ? null : NotificationPermission.values[value];
-      case 134: 
+      case 134:
         final int? value = readValue(buffer) as int?;
         return value == null ? null : KernelVerdict.values[value];
-      case 135: 
+      case 135:
         final int? value = readValue(buffer) as int?;
         return value == null ? null : ShellEventType.values[value];
-      case 136: 
+      case 136:
         return ShellConfigDto.decode(readValue(buffer)!);
-      case 137: 
+      case 137:
         return ShellInfo.decode(readValue(buffer)!);
-      case 138: 
+      case 138:
         return WebEvent.decode(readValue(buffer)!);
-      case 139: 
+      case 139:
         return OpenChatRequest.decode(readValue(buffer)!);
-      case 140: 
+      case 140:
         return PushMessage.decode(readValue(buffer)!);
-      case 141: 
+      case 141:
         return PushDecision.decode(readValue(buffer)!);
-      case 142: 
+      case 142:
         return KernelInfo.decode(readValue(buffer)!);
-      case 143: 
+      case 143:
         return ConsoleRecord.decode(readValue(buffer)!);
-      case 144: 
+      case 144:
         return ShellDiagnostics.decode(readValue(buffer)!);
-      case 145: 
+      case 145:
         return ShellEvent.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
@@ -1057,25 +1022,32 @@ class SsgShellHostApi {
   /// Constructor for [SsgShellHostApi].  The [binaryMessenger] named argument is
   /// available for dependency injection.  If it is left null, the default
   /// BinaryMessenger will be used which routes to the host platform.
-  SsgShellHostApi({BinaryMessenger? binaryMessenger, String messageChannelSuffix = ''})
-      : pigeonVar_binaryMessenger = binaryMessenger,
-        pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
+  SsgShellHostApi({
+    BinaryMessenger? binaryMessenger,
+    String messageChannelSuffix = '',
+  }) : pigeonVar_binaryMessenger = binaryMessenger,
+       pigeonVar_messageChannelSuffix =
+           messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
   final BinaryMessenger? pigeonVar_binaryMessenger;
 
   static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
 
   final String pigeonVar_messageChannelSuffix;
 
-  /// 必须最先调。原生据此落盘配置（§9.6 的 B 面缓存也在这里更新），
-  /// 并按 §1.1 组装 `__SSG_SHELL__`。重复调用会覆盖配置，但不会重建 WebView。
+  /// Must be called first. Native code persists the configuration, including the §9.6 B-side cache,
+  /// and builds `__SSG_SHELL__` for §1.1. Repeated calls update configuration without recreating the WebView.
   Future<ShellInfo> initialize(ShellConfigDto config) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.initialize$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.initialize$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[config],
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[config]);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
@@ -1096,15 +1068,17 @@ class SsgShellHostApi {
     }
   }
 
-  /// §8.4 体验与性能 1：提前创建 WebView 并开始加载入口地址。
-  /// B 面未开启时是空操作。幂等。
+  /// §8.4 Performance 1: create the WebView and start loading the landing URL in advance.
+  /// An idempotent no-op when B side is disabled.
   Future<void> preload() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.preload$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.preload$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1121,15 +1095,17 @@ class SsgShellHostApi {
     }
   }
 
-  /// 打开 IM 容器：Android `startActivity(ImActivity)`，iOS present 全屏 VC。
-  /// 已经在前台时是空操作。
+  /// Open the IM container: Android starts `ImActivity`; iOS presents a fullscreen view controller.
+  /// A no-op when the container is already in the foreground.
   Future<void> openIm() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.openIm$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.openIm$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1146,14 +1122,16 @@ class SsgShellHostApi {
     }
   }
 
-  /// 关闭 IM 容器。按 §10.6，**不会**销毁 WebView 实例。
+  /// Close the IM container without destroying the WebView instance, as required by §10.6.
   Future<void> closeIm() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.closeIm$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.closeIm$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1171,12 +1149,14 @@ class SsgShellHostApi {
   }
 
   Future<bool> isImRunning() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.isImRunning$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.isImRunning$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1198,15 +1178,19 @@ class SsgShellHostApi {
     }
   }
 
-  /// §9.6 更新 B 面开关并落盘，下次冷启动原生直接按缓存走，不等 Dart。
+  /// §9.6 Update and persist the B-side switch so the next native cold start uses the cache without waiting for Dart.
   Future<void> setBSideEnabled(bool enabled) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.setBSideEnabled$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.setBSideEnabled$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[enabled],
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[enabled]);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
@@ -1223,12 +1207,14 @@ class SsgShellHostApi {
   }
 
   Future<bool> isBSideEnabled() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.isBSideEnabled$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.isBSideEnabled$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1250,16 +1236,20 @@ class SsgShellHostApi {
     }
   }
 
-  /// §5.3 打开会话。Web 还没发 `eventWebReady` 时自动暂存，就绪后补发，
-  /// 只调一次，不重试。
+  /// §5.3 Open a conversation. Queue the request until `eventWebReady` if needed,
+  /// then deliver it once without retrying.
   Future<void> openChat(OpenChatRequest request) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.openChat$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.openChat$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
@@ -1275,16 +1265,20 @@ class SsgShellHostApi {
     }
   }
 
-  /// §5.4 + §11.3 推送到达时调。返回「要不要展示通知」以及有没有捅醒 Web。
-  /// 原生自己判断前台状态，Dart 不需要传。
+  /// §5.4 + §11.3 Call when a push arrives. Returns the notification display decision and whether the Web connection was nudged.
+  /// Native code determines foreground state; Dart does not need to supply it.
   Future<PushDecision> handlePushReceived(PushMessage message) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.handlePushReceived$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.handlePushReceived$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[message],
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[message]);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
@@ -1305,15 +1299,19 @@ class SsgShellHostApi {
     }
   }
 
-  /// §5.3 通知被点击时调。会按需 `openIm()` 并把参数排队，等 `eventWebReady`。
+  /// §5.3 Call when a notification is clicked. Opens IM if needed and queues the payload until `eventWebReady`.
   Future<void> handlePushOpened(PushMessage message) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.handlePushOpened$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.handlePushOpened$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[message],
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[message]);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
@@ -1329,15 +1327,19 @@ class SsgShellHostApi {
     }
   }
 
-  /// §10.4 / §11.3 手动调一次 `onNetwork(type)`。`none` 会被丢弃。
+  /// §10.4 / §11.3 Manually call `onNetwork(type)` once; `none` is discarded.
   Future<void> nudgeNetwork(NetworkType type) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.nudgeNetwork$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.nudgeNetwork$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[type],
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[type]);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
@@ -1353,14 +1355,16 @@ class SsgShellHostApi {
     }
   }
 
-  /// §11.2 手动触发兜底 reload（调试与诊断入口用）。
+  /// §11.2 Trigger a recovery reload manually for debugging and diagnostics.
   Future<void> reloadWeb() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.reloadWeb$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.reloadWeb$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1377,14 +1381,16 @@ class SsgShellHostApi {
     }
   }
 
-  /// §11.2.3 手动销毁重建 WebView（Android 会先结束渲染进程）。
+  /// §11.2.3 Destroy and recreate the WebView manually; Android terminates the renderer first.
   Future<void> recreateWebView() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.recreateWebView$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.recreateWebView$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1401,16 +1407,20 @@ class SsgShellHostApi {
     }
   }
 
-  /// §5.4 设角标。`manageBadge` 为 true 时插件已自动按 `unreadCount` 设，
-  /// 这里留给需要自己接管的场合。
+  /// §5.4 Set the badge count. With `manageBadge` enabled the plugin already updates it from `unreadCount`;
+  /// this method allows the host to take over badge management.
   Future<void> setBadgeCount(int count) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.setBadgeCount$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.setBadgeCount$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[count],
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[count]);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
@@ -1427,12 +1437,14 @@ class SsgShellHostApi {
   }
 
   Future<ShellDiagnostics> getDiagnostics() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.getDiagnostics$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.getDiagnostics$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1454,14 +1466,16 @@ class SsgShellHostApi {
     }
   }
 
-  /// §11.6 导出成可复制的纯文本。
+  /// §11.6 Export diagnostics as copyable plain text.
   Future<String> exportDiagnostics() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.exportDiagnostics$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.exportDiagnostics$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1483,14 +1497,16 @@ class SsgShellHostApi {
     }
   }
 
-  /// §8.1 / §11.7 读内核版本。
+  /// §8.1 / §11.7 Read the WebView engine version.
   Future<KernelInfo> getKernelInfo() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.getKernelInfo$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.getKernelInfo$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1513,12 +1529,14 @@ class SsgShellHostApi {
   }
 
   Future<NotificationPermission> getNotificationPermission() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.getNotificationPermission$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.getNotificationPermission$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1540,14 +1558,16 @@ class SsgShellHostApi {
     }
   }
 
-  /// §6.2 只在收到 `eventLogin` 之后调。启动期调用会被原生拒掉并返回当前状态。
+  /// §6.2 Call only after `eventLogin`. Native code rejects startup requests and returns the current permission state.
   Future<NotificationPermission> requestNotificationPermission() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.requestNotificationPermission$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.requestNotificationPermission$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1569,14 +1589,16 @@ class SsgShellHostApi {
     }
   }
 
-  /// §6.2 权限被永久拒绝后的二次引导：拉起系统设置页。
+  /// §6.2 Open system settings to guide the user after permission is permanently denied.
   Future<void> openSystemSettings() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.openSystemSettings$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.openSystemSettings$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1593,14 +1615,16 @@ class SsgShellHostApi {
     }
   }
 
-  /// §10.3 Android 申请电池优化白名单（规范要求不在首启弹）。iOS 空操作返回 true。
+  /// §10.3 Request exemption from Android battery optimization outside the first launch. On iOS, return true without action.
   Future<bool> requestBatteryOptimizationExemption() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.requestBatteryOptimizationExemption$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.requestBatteryOptimizationExemption$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1623,12 +1647,14 @@ class SsgShellHostApi {
   }
 
   Future<bool> isBatteryOptimizationIgnored() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.isBatteryOptimizationIgnored$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.isBatteryOptimizationIgnored$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1650,14 +1676,16 @@ class SsgShellHostApi {
     }
   }
 
-  /// §1.3 跑一次注入自检，读 `is-web-browser` class。
+  /// §1.3 Run the injection check by reading the `is-web-browser` class.
   Future<bool> verifyInjection() async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.verifyInjection$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.verifyInjection$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
@@ -1679,16 +1707,20 @@ class SsgShellHostApi {
     }
   }
 
-  /// 调试用：在 Web 里执行一段 JS 并返回结果字符串。
-  /// 禁止用它清存储（§8.3），插件会拦掉已知的清理调用。
+  /// Debugging: execute JavaScript in the WebView and return its result as a string.
+  /// Do not clear storage (§8.3); the plugin blocks known storage-clearing calls.
   Future<String> evaluateJavaScript(String script) async {
-    final String pigeonVar_channelName = 'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.evaluateJavaScript$pigeonVar_messageChannelSuffix';
-    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
+    final String pigeonVar_channelName =
+        'dev.flutter.pigeon.ssg_shell.SsgShellHostApi.evaluateJavaScript$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel =
+        BasicMessageChannel<Object?>(
+          pigeonVar_channelName,
+          pigeonChannelCodec,
+          binaryMessenger: pigeonVar_binaryMessenger,
+        );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[script],
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[script]);
     final List<Object?>? pigeonVar_replyList =
         await pigeonVar_sendFuture as List<Object?>?;
     if (pigeonVar_replyList == null) {
@@ -1713,60 +1745,83 @@ class SsgShellHostApi {
 abstract class SsgShellFlutterApi {
   static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
 
-  /// §3.1 的十个事件，原生收到后原样上抛。
+  /// §3.1 Forward all ten Web events unchanged after native reception.
   void onWebEvent(WebEvent event);
 
-  /// 原生侧的生命周期、恢复动作、console 转发。
+  /// Native lifecycle events, recovery actions, and console forwarding.
   void onShellEvent(ShellEvent event);
 
-  static void setUp(SsgShellFlutterApi? api, {BinaryMessenger? binaryMessenger, String messageChannelSuffix = '',}) {
-    messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
+  static void setUp(
+    SsgShellFlutterApi? api, {
+    BinaryMessenger? binaryMessenger,
+    String messageChannelSuffix = '',
+  }) {
+    messageChannelSuffix =
+        messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
     {
-      final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onWebEvent$messageChannelSuffix', pigeonChannelCodec,
-          binaryMessenger: binaryMessenger);
+      final BasicMessageChannel<Object?>
+      pigeonVar_channel = BasicMessageChannel<Object?>(
+        'dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onWebEvent$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
         pigeonVar_channel.setMessageHandler((Object? message) async {
-          assert(message != null,
-          'Argument for dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onWebEvent was null.');
+          assert(
+            message != null,
+            'Argument for dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onWebEvent was null.',
+          );
           final List<Object?> args = (message as List<Object?>?)!;
           final WebEvent? arg_event = (args[0] as WebEvent?);
-          assert(arg_event != null,
-              'Argument for dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onWebEvent was null, expected non-null WebEvent.');
+          assert(
+            arg_event != null,
+            'Argument for dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onWebEvent was null, expected non-null WebEvent.',
+          );
           try {
             api.onWebEvent(arg_event!);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          }          catch (e) {
-            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
           }
         });
       }
     }
     {
-      final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onShellEvent$messageChannelSuffix', pigeonChannelCodec,
-          binaryMessenger: binaryMessenger);
+      final BasicMessageChannel<Object?>
+      pigeonVar_channel = BasicMessageChannel<Object?>(
+        'dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onShellEvent$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
         pigeonVar_channel.setMessageHandler((Object? message) async {
-          assert(message != null,
-          'Argument for dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onShellEvent was null.');
+          assert(
+            message != null,
+            'Argument for dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onShellEvent was null.',
+          );
           final List<Object?> args = (message as List<Object?>?)!;
           final ShellEvent? arg_event = (args[0] as ShellEvent?);
-          assert(arg_event != null,
-              'Argument for dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onShellEvent was null, expected non-null ShellEvent.');
+          assert(
+            arg_event != null,
+            'Argument for dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onShellEvent was null, expected non-null ShellEvent.',
+          );
           try {
             api.onShellEvent(arg_event!);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          }          catch (e) {
-            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
           }
         });
       }

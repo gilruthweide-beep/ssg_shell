@@ -5,14 +5,14 @@ import kotlin.test.assertNull
 import org.junit.Test
 
 /**
- * §3.1 payload 解析。线上能收到三种形状，都得吃下去。
+ * §3.1 Payload parsing accepts all three observed production shapes.
  *
- * 纯 JVM 测试：只用到 org.json，不需要 Android 沙箱。
+ * Plain JVM tests using org.json only, without an Android sandbox.
  */
 class WebEventParserTest {
 
     @Test
-    fun `规范示例的形状`() {
+    fun `parses the specification payload shape`() {
         val event = WebEventParser.parse(
             "eventLogin",
             """{"eventName":"login","params":{"channelCode":"ch001","uid":"1571277787","timestamp":"1762000000000"}}""",
@@ -27,7 +27,7 @@ class WebEventParserTest {
     }
 
     @Test
-    fun `事件名从 handler 名推断`() {
+    fun `infers event name from handler`() {
         val event = WebEventParser.parse("eventWebReady", """{"timestamp":"1762000000000"}""")
 
         requireNotNull(event)
@@ -36,7 +36,7 @@ class WebEventParserTest {
     }
 
     @Test
-    fun `payload 就是 params 本身`() {
+    fun `accepts params directly as the payload`() {
         val event = WebEventParser.parse("eventChatOpen", """{"chatId":"-100123"}""")
 
         requireNotNull(event)
@@ -45,7 +45,7 @@ class WebEventParserTest {
     }
 
     @Test
-    fun `count 是数字时也能解析成数字`() {
+    fun `parses numeric count values`() {
         val numeric = WebEventParser.parse("eventUnreadCount", """{"params":{"count":7}}""")
         val text = WebEventParser.parse("eventUnreadCount", """{"params":{"count":"7"}}""")
 
@@ -54,7 +54,7 @@ class WebEventParserTest {
     }
 
     @Test
-    fun `Web 将来新增的事件不丢，原始名留在 rawName 里`() {
+    fun `preserves future Web event names in rawName`() {
         val event = WebEventParser.parse(null, """{"eventName":"somethingNew","params":{"a":"1"}}""")
 
         requireNotNull(event)
@@ -64,12 +64,12 @@ class WebEventParserTest {
     }
 
     @Test
-    fun `单参版本且 payload 里没有 eventName 时只能放弃`() {
+    fun `ignores one-argument payloads without eventName`() {
         assertNull(WebEventParser.parse(null, """{"uid":"1"}"""))
     }
 
     @Test
-    fun `payload 不是 JSON 时按 handler 名兜住`() {
+    fun `uses handler name when payload is not JSON`() {
         val event = WebEventParser.parse("eventWebAlive", "not json")
 
         requireNotNull(event)
@@ -78,7 +78,7 @@ class WebEventParserTest {
     }
 
     @Test
-    fun `十个 handler 名都能映射到对应事件`() {
+    fun `maps all ten handler names to their events`() {
         val expected = mapOf(
             "eventWebReady" to WebEventName.WEB_READY,
             "eventRegister" to WebEventName.REGISTER,

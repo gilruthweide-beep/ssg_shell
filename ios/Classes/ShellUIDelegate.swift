@@ -3,11 +3,11 @@ import Foundation
 import UIKit
 import WebKit
 
-/// §7.2 `WKUIDelegate` 回调：`window.open`、麦克风授权、以及页面偶尔会用的几个弹窗。
+/// §7.2 WKUIDelegate handles window.open, microphone permission, and occasional page dialogs.
 ///
-/// 文件选择不走这里 —— §7.3 要求由壳接管，见 `FilePickerBridge` 与
-/// `ShellInjection.fileInputScript`。全屏视频由 WebKit 自己处理，
-/// `allowsInlineMediaPlayback` 开着就能进退全屏。
+/// File selection is handled separately by the shell under §7.3; see FilePickerBridge and
+/// ShellInjection.fileInputScript. WebKit owns fullscreen video handling,
+/// with allowsInlineMediaPlayback enabling inline/fullscreen transitions.
 final class ShellUIDelegate: NSObject, WKUIDelegate {
 
   private let entryHost: String?
@@ -19,10 +19,10 @@ final class ShellUIDelegate: NSObject, WKUIDelegate {
     super.init()
   }
 
-  /// §7.2 `window.open` / `target="_blank"`：**返回 nil 并在当前 WebView 加载**。
+  /// §7.2 window.open / target="_blank": **return nil and load in the existing WebView**.
   ///
-  /// 不实现点链接没反应。外链交给系统浏览器，同源地址在当前实例里加载 ——
-  /// 新开一个同域 WebView 会踩 §10.5（第二个实例可能被选为主实例）。
+  /// Missing handling leaves links unresponsive. Open external links in the system browser and same-origin links in the current instance;
+  /// a second same-origin WebView would violate §10.5 and could enter the primary-instance election.
   func webView(
     _ webView: WKWebView,
     createWebViewWith configuration: WKWebViewConfiguration,
@@ -38,10 +38,10 @@ final class ShellUIDelegate: NSObject, WKUIDelegate {
     return nil
   }
 
-  /// §7.2 授予麦克风（iOS 15+）。不实现语音录不了。
+  /// §7.2 Authorize microphone access on iOS 15+; missing handling prevents voice recording.
   ///
-  /// §6.2：由 `getUserMedia` 触发，原生**在授权回调里再**向系统申请 ——
-  /// 启动阶段一律不申请。
+  /// §6.2 getUserMedia triggers this callback; only then request system permission.
+  /// Never request it at startup.
   @available(iOS 15.0, *)
   func webView(
     _ webView: WKWebView,
@@ -50,39 +50,41 @@ final class ShellUIDelegate: NSObject, WKUIDelegate {
     type: WKMediaCaptureType,
     decisionHandler: @escaping (WKPermissionDecision) -> Void
   ) {
-    // §6.1 Web 只用麦克风：没有音视频通话，摄像头一律不给。
+    // §6.1 The Web application uses the microphone only, not audio/video calls; reject camera requests.
     guard type == .microphone else {
       decisionHandler(.deny)
       return
     }
-    // 这次请求之前就已经被拒了：系统不会再弹框，Web 只能弹一句提示。
+    // Denied before this request: iOS will not prompt again, and the Web application can only show a notice.
     let alreadyDenied = AVCaptureDevice.authorizationStatus(for: .audio) == .denied
     PermissionCoordinator.requestMicrophone { [weak self] granted in
       decisionHandler(granted ? .grant : .deny)
-      // §6.2 / §12.3「语音被拒后」：去系统设置的二次引导由原生负责。
-      // 用户刚在系统框里点了拒绝的那一次不追着弹。
+      // §6.2 / §12.3 After a microphone denial, native code offers Settings.
+      // Do not follow up immediately after the user just declined the system prompt.
       if !granted && alreadyDenied { self?.showMicrophoneSettingsGuide() }
     }
   }
 
   private func showMicrophoneSettingsGuide() {
-    guard let presenter = host?.presenter else { return }
+    // Only a new recording attempt shows this; never over another alert or an offscreen controller.
+    guard let presenter = host?.presenter, presenter.viewIfLoaded?.window != nil,
+          presenter.presentedViewController == nil else { return }
     let alert = UIAlertController(
-      title: nil,
-      message: "麦克风权限已关闭，请在系统设置中允许后再发送语音",
+      title: "Microphone is off",
+      message: "Allow microphone access in device settings, then return and try recording again.",
       preferredStyle: .alert
     )
-    alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-    alert.addAction(UIAlertAction(title: "去设置", style: .default) { _ in
+    alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+    alert.addAction(UIAlertAction(title: "Open settings", style: .default) { _ in
       PermissionCoordinator.openAppSettings()
     })
     presenter.present(alert, animated: true)
   }
 
-  // ------------------------------------------------------------- 页面弹窗
+  // ------------------------------------------------------------- Page dialogs
 
-  // Web 不依赖这三个，但不实现的话 WKWebView 会直接丢掉调用、让页面的 await 永远挂住。
-  // 实现成最朴素的系统弹窗即可。
+  // The Web application does not depend on these dialogs, but missing handlers can leave its awaits unresolved.
+  // Simple system dialogs are sufficient.
 
   func webView(
     _ webView: WKWebView,
@@ -95,7 +97,7 @@ final class ShellUIDelegate: NSObject, WKUIDelegate {
       return
     }
     let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
-    alert.addAction(UIAlertAction(title: "好", style: .default) { _ in completionHandler() })
+    alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
     presenter.present(alert, animated: true)
   }
 
@@ -110,8 +112,8 @@ final class ShellUIDelegate: NSObject, WKUIDelegate {
       return
     }
     let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
-    alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in completionHandler(false) })
-    alert.addAction(UIAlertAction(title: "好", style: .default) { _ in completionHandler(true) })
+    alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
+    alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
     presenter.present(alert, animated: true)
   }
 
@@ -128,8 +130,8 @@ final class ShellUIDelegate: NSObject, WKUIDelegate {
     }
     let alert = UIAlertController(title: nil, message: prompt, preferredStyle: .alert)
     alert.addTextField { $0.text = defaultText }
-    alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in completionHandler(nil) })
-    alert.addAction(UIAlertAction(title: "好", style: .default) { _ in
+    alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(nil) })
+    alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
       completionHandler(alert.textFields?.first?.text)
     })
     presenter.present(alert, animated: true)

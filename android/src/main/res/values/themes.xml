@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- §8.4 体验与性能 3 / §9.4：安全区外的状态栏、底部条，以及窗口背景，
-         一律白色，状态栏深色图标。登录页和深色模式下也一样，不按页面取色。
-         §9.4：不开 edge-to-edge，WebView 位于状态栏与导航栏之间。 -->
+    <!-- §8.4 Performance 3 / §9.4: status bar, bottom safe area, and window background,
+         Always use white with dark status-bar icons, including login screens and dark mode, regardless of page color.
+         §9.4 Disable edge-to-edge; place WebView between the status and navigation bars. -->
     <style name="Theme.SsgShell.Im" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/ssg_shell_surface</item>
         <item name="postSplashScreenTheme">@style/Theme.SsgShell.Im.Content</item>

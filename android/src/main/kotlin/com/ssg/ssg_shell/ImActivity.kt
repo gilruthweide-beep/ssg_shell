@@ -33,15 +33,15 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
 /**
- * §8.4 承载 IM WebView 的原生 Activity。
+ * §8.4 Native Activity hosting the IM WebView.
  *
- * WebView 不属于这个 Activity —— 它由 [ImWebViewHolder] 在 Application 级持有，
- * 这里只负责挂上、取下，以及提供那些非得有 Activity 才能做的事（[ShellWebViewHost]）：
- * 拉相册、申请麦克风、全屏视频、开外链、错误页。
+ * The WebView belongs to the application-level [ImWebViewHolder], not this Activity.
+ * This Activity attaches/detaches it and supplies Activity-dependent [ShellWebViewHost] operations:
+ * photo selection, microphone permission, fullscreen video, external links, and error UI.
  *
- * 规范要求它可以直接当冷启动的第一个 Activity（§8.4 体验与性能 2）：
- * `installSplashScreen()` + `setKeepOnScreenCondition` 把系统启动图一直撑到
- * `eventWebReady`，中间不出现任何别的加载界面（§9.6）。
+ * The specification allows it to be the first Activity on a cold start (§8.4 Performance 2):
+ * `installSplashScreen()` and `setKeepOnScreenCondition` retain the system splash until
+ * `eventWebReady`, without introducing another loading screen (§9.6).
  */
 internal class ImActivity : ComponentActivity(), ShellWebViewHost {
 
@@ -49,10 +49,10 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
 
     private val main = Handler(Looper.getMainLooper())
 
-    /** §9.6 splash 还没撤。撤除条件：收到 `eventWebReady`，或到达上限。 */
+    /** §9.6 Keep the splash until eventWebReady or the maximum duration. */
     private var splashUp = true
 
-    /** `setKeepOnScreenCondition` 每帧回调一次，用时间戳判断比用标志位省事。 */
+    /** setKeepOnScreenCondition runs each frame; use a deadline timestamp instead of another state flag. */
     private var splashDeadlineAtMs = 0L
     private var splashTimeoutTask: Runnable? = null
 
@@ -60,41 +60,38 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
 
     private var errorView: View? = null
 
-    /** §7.1 全屏视频。 */
+    /** §7.1 Fullscreen video. */
     private var fullscreenView: View? = null
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
 
-    /** §7.1 `onPermissionRequest` 里挂起的那次麦克风请求。 */
+    /** §7.1 Microphone request pending from onPermissionRequest. */
     private var pendingAudio: PermissionRequest? = null
 
-    /** 向系统发起麦克风申请的时刻，用来分辨「系统没弹框就直接拒了」。 */
-    private var audioRequestedAtMs = 0L
-
     override fun onCreate(savedInstanceState: Bundle?) {
-        // §9.6 必须在 super.onCreate 之前装上，否则这一帧已经用 postSplashScreenTheme 画了。
+        // §9.6 Install before super.onCreate; otherwise the first frame already uses postSplashScreenTheme.
         val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
 
-        // 正常情况下 androidx.startup 早在 Application 之前就装配好了（见
-        // ShellStartupInitializer）。这一句只兜一种情况：宿主把那个 provider
-        // 用 tools:node="remove" 去掉了，而这个 Activity 又是冷启动的第一个。
+        // Normally androidx.startup initializes the shell before Application.onCreate (see
+        // ShellStartupInitializer). This call handles hosts that removed the provider
+        // with tools:node="remove" while using this Activity as the cold-start entry point.
         ShellStartupInitializer.ensure(this)
 
-        // §8.4 体验与性能 2：B 面未开启时转去 A 面并结束自己。
-        // 判断只读本地缓存（§9.6「把上次的结果缓存在本地，冷启动直接按缓存走」），
-        // 不等 Dart，也就不会以等待界面的形式出现在用户面前。
+        // §8.4 Performance 2: redirect to A side and finish when B side is disabled.
+        // Read only the local cache, as required by §9.6,
+        // so selecting the application side never waits for Dart or shows a loading screen.
         if (!ShellCore.isBSideEnabled()) {
             val aSide = ShellCore.aSideIntent()
             if (aSide == null) {
                 Log.e(
                     TAG,
-                    "B 面未开启，且没有配置 meta-data ${ShellConfig.META_A_SIDE_ACTIVITY}，" +
-                        "无处可去，直接结束。",
+                    "B side is disabled and metadata ${ShellConfig.META_A_SIDE_ACTIVITY} is missing;" +
+                        " no destination is available, so finish this Activity.",
                 )
             } else {
                 startActivity(aSide)
             }
-            // 不留在返回栈里：用户从 A 面按返回不该又回到这个空壳。
+            // Remove this empty container from the back stack so Back on A side does not reopen it.
             finish()
             overridePendingTransition(0, 0)
             return
@@ -103,33 +100,33 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         current = this
 
         val config = ShellCore.config()
-        // eventWebReady 每次页面加载只发一次。WebView 是预加载的、或者这个 Activity 是
-        // 被系统回收后重建的，那一条早就发过了，不会再来 —— 这时还撑着 splash 就只能
-        // 干等到上限。
+        // eventWebReady fires only once per page load. If the WebView was preloaded, or this Activity was
+        // recreated after the system reclaimed it, that event was sent long ago and will not come again; keeping the splash up
+        // now would just wait until the limit.
         splashUp = !ShellCore.isWebReady()
         splashDeadlineAtMs = SystemClock.uptimeMillis() + config.splashTimeoutMs
-        // §9.6 收到 eventWebReady 后立即撤，不要用固定时长定时器；
-        // 但 eventWebReady 可能永远不来（内核过低的不兼容页、脚本加载失败的重试页），
-        // 所以额外给一个上限兜底。
+        // §9.6 Remove the splash immediately after eventWebReady instead of using a fixed delay;
+        // eventWebReady may never arrive on an unsupported engine or failed script-loading page,
+        // so retain a maximum-duration fallback.
         splash.setKeepOnScreenCondition { splashUp && SystemClock.uptimeMillis() < splashDeadlineAtMs }
         if (splashUp) {
             splashTimeoutTask = Runnable {
                 if (splashUp) {
                     splashUp = false
                     ShellCore.notifySplashDismissed(ShellEventType.SPLASH_TIMED_OUT)
-                    Log.w(TAG, "splash 到达 ${config.splashTimeoutMs}ms 上限，强制撤除（§9.6）")
+                    Log.w(TAG, "Splash reached its ${config.splashTimeoutMs}ms limit; removing it (§9.6)")
                 }
             }
             main.postDelayed(splashTimeoutTask!!, config.splashTimeoutMs)
         }
 
         container = FrameLayout(this).apply {
-            // §8.4 体验与性能 3：背景色与首屏一致，边缘不闪黑。
+            // §8.4 Performance 3: match the first-screen background to avoid dark flashes at the edges.
             setBackgroundColor(config.backgroundColorArgb)
         }
-        // §9.4 把 systemBars、ime、displayCutout 的 insets 转成 padding 并 CONSUMED，
-        // 不让 insets 再传进 WebView —— 否则页面读到的 env(safe-area-inset-*) 不为 0，
-        // 顶部和底部各多一段空白。
+        // §9.4 Convert systemBars, ime, and displayCutout insets to padding and consume them.
+        // Do not forward them to the WebView, which would otherwise read nonzero env(safe-area-inset-*) values
+        // and add duplicate spacing above and below its content.
         ViewCompat.setOnApplyWindowInsetsListener(container) { view, insets ->
             val i = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or
@@ -141,47 +138,47 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         }
         setContentView(container)
 
-        // §7.3 ActivityResultLauncher 必须在到达 STARTED 之前注册完。
+        // §7.3 Register ActivityResultLauncher before the Activity reaches STARTED.
         picker = PhotoPickerDelegate(this)
 
         ImWebViewHolder.attachContext(this)
         attachWebView(ImWebViewHolder.get(this, config))
         ImWebViewHolder.host = this
-        // 预加载阶段首屏就加载失败的话，那时没有容器，重试页现在补上。
+        // If the initial page failed to load during preload, there was no container then; show the retry page now.
         ShellCore.onHostAttached(this)
 
-        // §9.1 返回键先回退 Web 的历史。直接 finish() 会导致用户在会话里按返回就退出整个 App。
-        // 用 OnBackPressedDispatcher 注册，Android 14 以上的返回手势才有预览动画并走同一套逻辑
-        // （§8.4 体验与性能 7，Manifest 里还要 android:enableOnBackInvokedCallback="true"）。
+        // §9.1 Back navigates Web history first; immediately finishing would exit the application from a conversation.
+        // Register through OnBackPressedDispatcher so Android 14+ predictive gestures show previews and use the same navigation logic
+        // (§8.4 Performance 7 also requires android:enableOnBackInvokedCallback="true" in the Manifest).
         onBackPressedDispatcher.addCallback(this) {
             when {
                 fullscreenView != null -> fullscreenCallback?.onCustomViewHidden()
                 ImWebViewHolder.current()?.canGoBack() == true -> ImWebViewHolder.current()?.goBack()
-                // §10.6 栈底退到后台，不销毁 WebView。也不调 clearHistory()（§9.1）。
+                // §10.6 Move the root task to the background without destroying the WebView or clearing history (§9.1).
                 else -> moveTaskToBack(true)
             }
         }
 
         if (config.entryUrl.isBlank()) {
-            showErrorPage("入口地址未配置（§2.1）")
+            showErrorPage("Landing URL is not configured (§2.1)")
         }
 
         maybeWarnOutdatedKernel()
     }
 
     /**
-     * §11.7 内核版本引导。
+     * §11.7 Engine update guidance.
      *
-     * Android 的 WebView 是可独立更新的系统组件，老设备上可能停留在很旧的版本。
-     * 低于 §8.1 的下限（92）时**一次性**提示，允许忽略，**不要阻断启动** ——
-     * 所以这里既不挡页面加载，也不重复弹。
+     * Android WebView is an independently updatable system component that may be outdated on older devices.
+     * Below the §8.1 minimum (92), show a dismissible prompt **once** without blocking startup.
+     * Keep page loading active and avoid repeated prompts.
      */
     private fun maybeWarnOutdatedKernel() {
         if (ShellConfig.kernelWarned(this)) return
         val info = ShellCore.kernelInfo()
         if (info.verdict != KernelVerdict.BELOW_MINIMUM) return
         ShellConfig.markKernelWarned(this)
-        // 页面照常加载，提示只是盖在上面的一层。
+        // The page continues loading underneath the update prompt.
         AlertDialog.Builder(this)
             .setMessage(R.string.ssg_shell_kernel_outdated)
             .setPositiveButton(R.string.ssg_shell_kernel_update) { _, _ ->
@@ -194,7 +191,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
 
     private fun openWebViewUpdatePage(packageName: String) {
         val target = packageName.ifBlank { "com.google.android.webview" }
-        // 先试应用商店的详情页，没有商店时退到网页版。
+        // Try the application store detail page first, then fall back to its website.
         val market = Intent(Intent.ACTION_VIEW, "market://details?id=$target".toUri())
         if (openExternalIntent(market)) return
         openExternal("https://play.google.com/store/apps/details?id=$target")
@@ -204,7 +201,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         runCatching { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true }
             .getOrDefault(false)
 
-    /** §5.3 singleTask：通知点击时复用已在栈里的实例，深链从这里进来。 */
+    /** §5.3 singleTask reuses the existing Activity for notification clicks; deep links enter here. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -214,11 +211,11 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         super.onStart()
         if (isFinishing) return
         ImWebViewHolder.attachContext(this)
-        // §10.2 WebView 真的可见了：ShellCore 据此翻 visibilitychange 并调 onForeground()。
+        // §10.2 The WebView is actually visible; ShellCore updates visibilitychange and calls onForeground().
         ShellCore.setImRunning(true)
-        // §5 的推送绑定接在 Dart 上。这个 Activity 是冷启动第一个时没有引擎在跑；
-        // 宿主的 FlutterActivity 销毁后也可能一个都不剩。每次回到前台确认一遍，
-        // 排在首帧之后去起，不跟首屏抢主线程。已经有引擎时是空操作。
+        // §5 push binding lives in Dart. When this Activity is the first one on cold start, no engine is running;
+        // there may also be none left after the host's FlutterActivity is destroyed. Check again on every return to the foreground,
+        // starting it after the first frame so it does not compete with the first screen for the main thread. No-op when an engine already exists.
         container.post { ShellCore.ensureDartEngine() }
     }
 
@@ -236,7 +233,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         picker = null
         pendingAudio?.deny()
         pendingAudio = null
-        // §10.6 只取下，不销毁：重建 WebView = 重新加载整个 Web = 重建长连接 + 重拉历史。
+        // §10.6 Detach without destroying: recreation reloads the entire Web app, reconnects its socket, and fetches history again.
         ImWebViewHolder.current()?.let { (it.parent as? ViewGroup)?.removeView(it) }
         ImWebViewHolder.detachContext(applicationContext)
         super.onDestroy()
@@ -263,15 +260,15 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
     ): Boolean = picker?.launch(params, callback) ?: false
 
     /**
-     * §7.1 / §6.2 麦克风：由 `getUserMedia` 触发，原生在授权回调里**再**向系统申请。
-     * 启动阶段一律不申请。
+     * §7.1 / §6.2 `getUserMedia` triggers microphone access; request system permission from its native callback.
+     * Never request it at startup.
      */
     override fun requestAudioPermission(request: PermissionRequest) {
         val wanted = request.resources
             .filter { it == PermissionRequest.RESOURCE_AUDIO_CAPTURE }
             .toTypedArray()
         if (wanted.isEmpty()) {
-            // Web 只用麦克风（§6.1 没有音视频通话），别的一律不给。
+            // §6.1 The Web application uses only microphone capture, not audio/video calls; reject other requested resources.
             request.deny()
             return
         }
@@ -285,7 +282,6 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         }
         pendingAudio?.deny()
         pendingAudio = request
-        audioRequestedAtMs = SystemClock.elapsedRealtime()
         ActivityCompat.requestPermissions(
             this,
             arrayOf(Manifest.permission.RECORD_AUDIO),
@@ -293,14 +289,14 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         )
     }
 
-    /** §7.1 不实现会残留弹窗。 */
+    /** §7.1 Clean up permission UI to avoid leaving a dialog open. */
     override fun cancelPermissionRequest(request: PermissionRequest) {
         if (pendingAudio === request) {
             pendingAudio = null
         }
     }
 
-    @Deprecated("ComponentActivity 已标记废弃，但 WebView 的麦克风授权只能走这条回调")
+    @Deprecated("Deprecated by ComponentActivity, but required for WebView microphone permission results")
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<String>,
@@ -325,23 +321,19 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
             request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
         } else {
             request.deny()
-            // §6.2 / §12.3「语音被拒后」：Web 弹提示，去系统设置的二次引导由原生负责。
-            // 宿主的 Flutter 界面盖不到这个 Activity 上面，所以只能在这里给。
-            // 只在「已经永久拒绝」时给：系统没弹框、几乎立刻就回了拒绝。用户刚在系统框里
-            // 点了拒绝的那一次不追着弹。
-            val answeredWithoutPrompt =
-                SystemClock.elapsedRealtime() - audioRequestedAtMs < AUTO_DENY_WINDOW_MS
-            val canAskAgain = ActivityCompat.shouldShowRequestPermissionRationale(
-                this,
-                Manifest.permission.RECORD_AUDIO,
-            )
-            if (answeredWithoutPrompt && !canAskAgain) showMicrophoneSettingsGuide()
+            // §6.2 / §12.3 After a microphone denial, the Web application shows a notice and native code
+            // offers Settings; the host's Flutter UI cannot cover this Activity.
+            // Local patch: offer it after every denial, not only a permanent one. Chromium can cache
+            // the origin denial and skip later native callbacks, so this may be the last chance.
+            // An empty result means the prompt was interrupted, not that the user decided.
+            if (grantResults.isNotEmpty()) showMicrophoneSettingsGuide()
         }
     }
 
     private fun showMicrophoneSettingsGuide() {
         if (isFinishing || isDestroyed) return
         AlertDialog.Builder(this)
+            .setTitle(R.string.ssg_shell_mic_denied_title)
             .setMessage(R.string.ssg_shell_mic_denied)
             .setPositiveButton(R.string.ssg_shell_open_settings) { _, _ ->
                 PermissionCoordinator.openAppSettings(this)
@@ -350,7 +342,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
             .show()
     }
 
-    /** §7.1 视频全屏。 */
+    /** §7.1 Video fullscreen. */
     override fun showCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
         if (fullscreenView != null) {
             callback.onCustomViewHidden()
@@ -377,18 +369,18 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         ImWebViewHolder.current()?.visibility = View.VISIBLE
     }
 
-    /** §7.1 外链、`tel:`、`mailto:` 交给系统，不然用户出不来。 */
+    /** §7.1 Delegate external links, tel:, and mailto: to the system instead of trapping navigation. */
     override fun openExternal(url: String): Boolean {
         val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
         val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return runCatching { startActivity(intent); true }
-            .onFailure { Log.w(TAG, "没有应用能打开 $url", it) }
+            .onFailure { Log.w(TAG, "No application can open $url", it) }
             .getOrDefault(false)
     }
 
     /**
-     * §7.1 `onCreateWindow` → 行为对齐 iOS 的 `createWebViewWith`（§7.2）：
-     * 外链走系统浏览器，同源地址在**当前**实例里加载（§10.5 只开一个 WebView 实例）。
+     * §7.1 `onCreateWindow` matches the iOS `createWebViewWith` behavior (§7.2):
+     * open external links in the system browser and same-origin URLs in the current WebView (§10.5).
      */
     override fun openNewWindow(url: String?): Boolean {
         val target = url?.takeIf { it.isNotBlank() } ?: return false
@@ -403,9 +395,9 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         return openExternal(target)
     }
 
-    /** §9.6 首屏加载失败接管为原生重试页，不要露出 WebView 默认错误页。 */
+    /** §9.6 Replace initial-load failures with a native retry screen instead of the default WebView error UI. */
     override fun showErrorPage(message: String?) {
-        // 页面已经画出来之后的子资源失败不该盖一层错误页，调用方（§7.1）只在主框架失败时调。
+        // Subresource failures after rendering must not cover the page; §7.1 callers invoke this only for main-frame failures.
         errorView?.let { existing ->
             (existing.findViewById<View>(ID_ERROR_BODY) as? TextView)?.text =
                 message ?: getString(R.string.ssg_shell_error_body)
@@ -420,7 +412,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ),
         )
-        // 错误页顶上来之后 splash 就该撤了，不然用户只看到启动图，不知道发生了什么。
+        // Remove the splash when displaying an error page so the user can see what happened.
         dismissSplash(ShellEventType.LOAD_FAILED)
     }
 
@@ -430,7 +422,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         container.removeView(view)
     }
 
-    /** §9.6 收到 `eventWebReady` 后立即撤 splash。 */
+    /** §9.6 Remove the splash immediately after `eventWebReady`. */
     override fun dismissSplash(reason: ShellEventType) {
         if (!splashUp) return
         splashUp = false
@@ -439,7 +431,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         ShellCore.notifySplashDismissed(reason)
     }
 
-    /** §11.2.3 WebView 实例被换掉，重新挂上新实例。 */
+    /** §11.2.3 Reattach the replacement WebView after recreation. */
     override fun onWebViewReplaced(webView: WebView) {
         hideErrorPage()
         hideCustomView()
@@ -447,7 +439,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
         attachWebView(webView)
     }
 
-    // ------------------------------------------------------------ 错误页
+    // ------------------------------------------------------------ Error screen
 
     private fun buildErrorPage(message: String?): View {
         val pad = dp(24f)
@@ -456,7 +448,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
             gravity = Gravity.CENTER
             setBackgroundColor(ShellCore.config().backgroundColorArgb)
             setPadding(pad, pad, pad, pad)
-            // 盖在 WebView 上面，别让下面的点击穿过去。
+            // Cover the WebView and consume touches instead of passing them through.
             isClickable = true
 
             addView(
@@ -482,7 +474,7 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
                     text = getString(R.string.ssg_shell_error_retry)
                     setOnClickListener {
                         hideErrorPage()
-                        // §8.3 资源加载失败时的兜底只做 reload，不要顺手清缓存。
+                        // §8.3 Retry resource-loading failures by reloading only; preserve caches.
                         val web = ImWebViewHolder.current()
                         val url = web?.url
                         if (web != null && !url.isNullOrBlank() && url != "about:blank") {
@@ -502,15 +494,12 @@ internal class ImActivity : ComponentActivity(), ShellWebViewHost {
     internal companion object {
         private const val TAG = "SsgShell"
         private const val REQ_AUDIO = 0x55A2
-
-        /** 系统真的弹了框的话，用户不可能在这么短的时间里答完。 */
-        private const val AUTO_DENY_WINDOW_MS = 800L
         private val ID_ERROR_BODY = View.generateViewId()
 
         @Volatile
         private var current: ImActivity? = null
 
-        /** [ShellCore.closeIm]。按 §10.6 只结束 Activity，不碰 WebView 实例。 */
+        /** [ShellCore.closeIm] finishes only the Activity and preserves the WebView instance (§10.6). */
         fun finishCurrent() {
             current?.finish()
         }

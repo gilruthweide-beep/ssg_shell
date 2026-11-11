@@ -1,17 +1,17 @@
 import Foundation
 
-/// §3.1 / §3.2 的 payload 解析。
+/// §3.1 / §3.2 Payload parsing.
 ///
-/// Web 调 `window.webkit.messageHandlers.<handler>.postMessage(payload)`，payload 是 JS
-/// 对象（原生侧为 `NSDictionary`），不是 JSON 字符串。但形状不止一种，都要吃下去：
-///  - `{"eventName":"login","params":{...}}`（规范示例）
-///  - 只有 params 内容，事件名靠 handler 名推断
-///  - 偶尔是 JSON 字符串
+/// The Web application calls window.webkit.messageHandlers.<handler>.postMessage(payload) with a JavaScript
+/// object (NSDictionary natively), not a JSON string. Accept these additional observed shapes as well:
+///  - `{"eventName":"login","params":{...}}` (the specification example).
+///  - Parameter contents only, with the event inferred from the handler.
+///  - An occasional JSON string.
 ///
-/// params 里的值规范说全是字符串，但不保证：`count` 可能是数字。统一转成十进制文本。
+/// Parameters should be strings, but count may be numeric. Normalize numeric values to decimal text.
 enum WebEventParser {
 
-  /// handler 名 → 事件名。`eventWebReady` → `webReady`。
+  /// Map handler names to event names, for example eventWebReady → webReady.
   static func handlerToEventName(_ handler: String) -> String {
     guard handler.hasPrefix("event"), handler.count > "event".count else { return handler }
     let rest = handler.dropFirst("event".count)
@@ -46,7 +46,7 @@ enum WebEventParser {
       return nil
     }
 
-    // params 可能在 "params" 下，也可能就是顶层对象。
+    // Parameters may be nested under "params" or supplied directly at the top level.
     let params = dictionary(from: dict?["params"]) ?? dict
     var flat: [String: String] = [:]
     params?.forEach { key, value in
@@ -88,7 +88,7 @@ enum WebEventParser {
     case is NSNull: return nil
     case let text as String: return text
     case let number as NSNumber:
-      // JS 的整数过线后是 NSNumber(double)，直接 description 会变成 "8842.0"。
+      // JavaScript integers arrive as NSNumber(double); description alone would produce "8842.0".
       if number === kCFBooleanTrue || number === kCFBooleanFalse {
         return number.boolValue ? "true" : "false"
       }

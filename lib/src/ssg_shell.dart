@@ -6,11 +6,11 @@ import 'messages.g.dart';
 import 'push.dart';
 import 'shell_config.dart';
 
-/// 马甲包原生壳的 Dart 门面。
+/// Dart facade for the native application shell.
 ///
-/// 壳的状态机全在原生侧 —— 按 §8.4 体验与性能 2，`ImActivity` / iOS 的容器可以是冷启动
-/// 的第一个界面，那时 Flutter 引擎还没起来，而 §11.1 的心跳、§11.2 的存活监测必须已经
-/// 在跑。所以这里只做三件事：下发配置、转发调用、把原生上抛的事件变成 Stream。
+/// The native layer owns the shell state machine. Under §8.4 Performance 2, `ImActivity` or the iOS container may be
+/// the first screen on a cold start, before Flutter starts, while the §11.1 heartbeat and §11.2 liveness monitor
+/// must already be running. Dart only supplies configuration, forwards calls, and exposes native events as streams.
 ///
 /// ```dart
 /// await SsgShell.instance.initialize(const ShellConfig(
@@ -25,18 +25,20 @@ class SsgShell implements SsgShellFlutterApi {
 
   static final SsgShell instance = SsgShell._();
 
-  /// 测试用：换掉过线的那一层。
+  /// Testing: replace the platform boundary.
   @visibleForTesting
   factory SsgShell.withHost(SsgShellHostApi host) => SsgShell._(host: host);
 
   final SsgShellHostApi _host;
 
-  final StreamController<WebEvent> _webEvents = StreamController<WebEvent>.broadcast();
-  final StreamController<ShellEvent> _shellEvents = StreamController<ShellEvent>.broadcast();
+  final StreamController<WebEvent> _webEvents =
+      StreamController<WebEvent>.broadcast();
+  final StreamController<ShellEvent> _shellEvents =
+      StreamController<ShellEvent>.broadcast();
 
   bool _wired = false;
 
-  /// [initialize] 进行期间到达的 Web 事件先攒着，见 [_releaseHeld]。
+  /// Web events arriving while [initialize] is in progress are held first; see [_releaseHeld].
   bool _holding = false;
   final List<WebEvent> _held = <WebEvent>[];
 
@@ -52,80 +54,79 @@ class SsgShell implements SsgShellFlutterApi {
   String? _activeChatId;
   int _unreadCount = 0;
 
-  // ------------------------------------------------------------------ 只读状态
+  // ------------------------------------------------------------------ Read-only state
 
-  /// §3.1 的十个事件，原样转发。
+  /// Forward all ten §3.1 Web events unchanged.
   Stream<WebEvent> get webEvents => _webEvents.stream;
 
-  /// 原生侧的生命周期、恢复动作、console 转发（[ShellEventType]）。
+  /// Native lifecycle events, recovery actions, and console forwarding ([ShellEventType]).
   Stream<ShellEvent> get shellEvents => _shellEvents.stream;
 
-  /// 只订阅某一类 Web 事件。
+  /// Subscribe to a single Web event type.
   Stream<WebEvent> on(WebEventName name) =>
       _webEvents.stream.where((event) => event.name == name);
 
-  /// 只订阅某一类原生事件。
+  /// Subscribe to a single native event type.
   Stream<ShellEvent> onShell(ShellEventType type) =>
       _shellEvents.stream.where((event) => event.type == type);
 
   ShellConfig? get config => _config;
 
-  /// §1.1 实际注入进 `window.__SSG_SHELL__` 的六个字段，[initialize] 之后才有值。
+  /// §1.1 The six fields injected into `window.__SSG_SHELL__`, available after [initialize].
   ShellInfo? get shellInfo => _shellInfo;
 
-  /// §3.1 收到过 `webReady`：首屏已可见、可接受 `openChat`。
+  /// §3.1 `webReady` was received: the first screen is visible and ready for `openChat`.
   bool get isWebReady => _webReady;
 
-  /// §5.1 当前是否登录态（由 `login` / `logout` 事件维护）。
+  /// §5.1 Login state maintained by `login` / `logout` events.
   bool get isLoggedIn => _loggedIn;
 
-  /// 当前登录的 IM uid，也就是 OneSignal 的 `external_id`（§5.1，无前缀无转换）。
+  /// The current IM uid, used unchanged as OneSignal's `external_id` (§5.1).
   String? get uid => _uid;
 
-  /// §5.4 用户正停在哪个会话。原生侧也记了一份，用于前台抑制。
+  /// §5.4 The active conversation, also tracked natively for foreground notification suppression.
   String? get activeChatId => _activeChatId;
 
-  /// §5.4 未读总数（不含免打扰会话）。
+  /// §5.4 Total unread count, excluding muted conversations.
   int get unreadCount => _unreadCount;
 
-  // -------------------------------------------------------------------- 装配
+  // -------------------------------------------------------------------- Initialization
 
-  /// 必须最先调。会落盘配置（§9.6 的 B 面缓存）并按 §1.1 组装 `__SSG_SHELL__`。
+  /// Call first to persist configuration (including the §9.6 B-side cache) and build `__SSG_SHELL__` for §1.1.
   ///
-  /// [requestNotificationAfterLogin] 为 true 时，收到第一条 `eventLogin` 后自动申请一次
-  /// 通知权限 —— §6.2 的时机要求就是「收到 `eventLogin` 之后」，未登录状态弹授权拒绝率
-  /// 极高，而多数系统不允许二次申请。
+  /// When [requestNotificationAfterLogin] is true, request notification permission once after the first
+  /// `eventLogin`, matching §6.2. Asking before login leads to high denial rates,
+  /// and most systems restrict subsequent permission prompts.
   ///
-  /// [autoPreload] 为 true 时紧接着调一次 [preload]。原生侧更早的预加载（进程启动即建
-  /// WebView，§8.4 体验与性能 1）由 Manifest 的 `AUTO_PRELOAD` meta-data 控制，不走这里。
+  /// When [autoPreload] is true, [preload] is called right after. Earlier native-side preloading (creating the
+  /// WebView at process start, §8.4 Performance 1) is controlled by the Manifest `AUTO_PRELOAD` meta-data, not here.
   ///
-  /// 原生预加载时，Web 可能在 Dart 上线之前就已经发过 `webReady` / `login` /
-  /// `unreadCount` / `chatOpen`。这几条带状态含义的事件会在这次调用里补发一遍，
-  /// 并在返回之后才进 [webEvents] —— 所以监听要么在调用之前挂好，要么紧跟在
-  /// `await initialize(...)` 后面同步挂上，中间不要再隔别的 `await`。
+  /// With native preloading, the Web may have already sent `webReady` / `login` /
+  /// `unreadCount` / `chatOpen` before Dart came online. These stateful events are replayed during this call
+  /// and enter [webEvents] only after it returns, so listeners must be attached either before the call or
+  /// synchronously right after `await initialize(...)`, with no other `await` in between.
   Future<ShellInfo> initialize(
     ShellConfig config, {
     bool requestNotificationAfterLogin = true,
     bool autoPreload = true,
   }) async {
-    assert(
-      config.entryUrl.isNotEmpty,
-      'entryUrl 不能为空（§2.1）',
-    );
+    assert(config.entryUrl.isNotEmpty, 'entryUrl must not be empty (§2.1)');
     assert(
       config.isSecureEntry,
-      'entryUrl 必须是 HTTPS（§8.1）：isSecureContext 为 false 时 Service Worker 注册不了，'
-      '媒体加载与缓存全部降级。当前值：${config.entryUrl}',
+      'entryUrl must use HTTPS (§8.1): when isSecureContext is false, Service Worker registration fails and'
+      ' media loading and caching are limited. Current value:${config.entryUrl}',
     );
     _wire();
     _config = config;
     _requestNotificationAfterLogin = requestNotificationAfterLogin;
     _holding = true;
     try {
-      // 没传 B 面开关就沿用原生落盘的那份，不拿默认值去覆盖它。
+      // If the B side switch is omitted, keep the value persisted by native code instead of overwriting it with a default.
       final persistedBSide =
           config.bSideEnabled == null && await _host.isBSideEnabled();
-      final info = await _host.initialize(config.toDto(persistedBSide: persistedBSide));
+      final info = await _host.initialize(
+        config.toDto(persistedBSide: persistedBSide),
+      );
       _shellInfo = info;
       if (autoPreload) await _host.preload();
       return info;
@@ -133,8 +134,8 @@ class SsgShell implements SsgShellFlutterApi {
       if (_held.isEmpty || _webEvents.hasListener) {
         _releaseHeld();
       } else {
-        // 还没人监听：排到事件循环的下一个任务，让调用方 `await` 之后同步挂上的
-        // 监听先就位，再放事件。
+        // No listener yet: schedule for the next event-loop task so listeners the caller attaches synchronously after `await`
+        // are in place before the events are released.
         Timer.run(_releaseHeld);
       }
     }
@@ -154,7 +155,7 @@ class SsgShell implements SsgShellFlutterApi {
     SsgShellFlutterApi.setUp(this);
   }
 
-  /// 释放 Stream。整个 App 生命周期只有一个壳，一般不需要调。
+  /// Release streams. A single shell normally lives for the application lifetime, so this is rarely needed.
   Future<void> dispose() async {
     SsgShellFlutterApi.setUp(null);
     _wired = false;
@@ -162,94 +163,96 @@ class SsgShell implements SsgShellFlutterApi {
     await _shellEvents.close();
   }
 
-  // ----------------------------------------------------------------- 容器控制
+  // ----------------------------------------------------------------- Container control
 
-  /// §8.4 体验与性能 1：提前创建 WebView 并开始加载入口地址。B 面未开启时是空操作。
+  /// §8.4 Performance 1: create the WebView and load the landing URL in advance; no-op when B side is disabled.
   Future<void> preload() => _host.preload();
 
-  /// 打开 IM 容器（Android 起 `ImActivity`，iOS present 全屏 VC）。
+  /// Open the IM container (Android starts `ImActivity`; iOS presents a fullscreen view controller).
   Future<void> openIm() => _host.openIm();
 
-  /// 关闭 IM 容器。按 §10.6 **不会**销毁 WebView 实例。
+  /// Close the IM container without destroying the WebView instance (§10.6).
   Future<void> closeIm() => _host.closeIm();
 
   Future<bool> isImRunning() => _host.isImRunning();
 
-  /// §9.6 B 面开关，会落盘；下次冷启动原生直接按缓存走，不等 Dart。
+  /// §9.6 Persist the B-side switch so the next native cold start uses the cache without waiting for Dart.
   Future<void> setBSideEnabled(bool enabled) => _host.setBSideEnabled(enabled);
 
   Future<bool> isBSideEnabled() => _host.isBSideEnabled();
 
-  // ----------------------------------------------------------------- 深链 / 推送
+  // ----------------------------------------------------------------- Deep links / push
 
-  /// §5.3 打开会话。Web 还没发 `eventWebReady` 时原生会暂存，就绪后补发。
+  /// §5.3 Open a conversation. Native code queues the request until `eventWebReady` if necessary.
   ///
-  /// 只调一次就够 —— Web 内部会等会话数据就绪（最长 20 秒）再跳转，不需要重试。
+  /// Call once: the Web application waits up to 20 seconds for conversation data before navigating, so native retries are unnecessary.
   Future<void> openChat(String chatId, {String? messageId}) =>
       _host.openChat(OpenChatRequest(chatId: chatId, messageId: messageId));
 
-  /// §5.4 + §11.3 推送**到达**时调，传 OneSignal 的 `additionalData` 原样 map。
+  /// §5.4 + §11.3 Call when a push **arrives**, supplying OneSignal's `additionalData` map unchanged.
   ///
-  /// 返回值告诉你这条通知要不要展示（用户正停在该会话里就别弹），以及原生有没有顺手
-  /// 调一次 `onNetwork()` 把 Web 捅醒（前台收到推送 = 长连接已死）。
+  /// The result indicates whether to display the notification (suppress it for the active conversation), and whether native code
+  /// called `onNetwork()` to wake the Web connection after a foreground push indicated a stale connection.
   Future<PushDecision> handlePushReceived(Map<Object?, Object?>? data) =>
       _host.handlePushReceived(parsePushData(data));
 
-  /// §5.3 通知**被点击**时调。原生会按需打开 IM 容器并把参数排队，等 `eventWebReady`。
+  /// §5.3 Call when a notification **is clicked**. Native code opens IM as needed and queues the payload until `eventWebReady`.
   Future<void> handlePushOpened(Map<Object?, Object?>? data) =>
       _host.handlePushOpened(parsePushData(data));
 
-  /// §5.4 手动设角标。`manageBadge` 为 true 时插件已按 `unreadCount` 自动设。
+  /// §5.4 Set the badge manually. With `manageBadge` enabled, the plugin already updates it from `unreadCount`.
   Future<void> setBadgeCount(int count) => _host.setBadgeCount(count);
 
-  // ----------------------------------------------------------------- 保活
+  // ----------------------------------------------------------------- Connection liveness
 
-  /// §10.4 / §11.3 手动调一次 `onNetwork(type)`。`none` 会被丢弃（Web 会忽略）。
+  /// §10.4 / §11.3 Manually call `onNetwork(type)` once. Discard `none`, which the Web application would ignore.
   Future<void> nudgeNetwork(NetworkType type) => _host.nudgeNetwork(type);
 
-  /// §11.2 手动触发兜底 reload。
+  /// §11.2 Trigger a recovery reload manually.
   Future<void> reloadWeb() => _host.reloadWeb();
 
-  /// §11.2.3 手动销毁重建 WebView（Android 会先结束渲染进程）。
+  /// §11.2.3 Destroy and recreate the WebView manually; Android terminates the renderer first.
   Future<void> recreateWebView() => _host.recreateWebView();
 
-  // ----------------------------------------------------------------- 权限
+  // ----------------------------------------------------------------- Permissions
 
   Future<NotificationPermission> getNotificationPermission() =>
       _host.getNotificationPermission();
 
-  /// §6.2 只在收到 `eventLogin` 之后调。启动期调用会被原生拒掉并返回当前状态。
+  /// §6.2 Call only after `eventLogin`. Native code rejects startup requests and returns the current permission state.
   Future<NotificationPermission> requestNotificationPermission() =>
       _host.requestNotificationPermission();
 
-  /// §6.2 权限被永久拒绝后的二次引导：拉起系统设置页。
+  /// §6.2 Open system settings to guide the user after permission is permanently denied.
   Future<void> openSystemSettings() => _host.openSystemSettings();
 
-  /// §10.3 电池优化白名单。规范要求**不在首启弹** —— 放设置页引导，
-  /// 或用户反馈收不到消息时再引导。
+  /// §10.3 Request battery optimization exemption outside the first launch. Offer it from settings
+  /// or when the user reports missing messages.
   Future<bool> requestBatteryOptimizationExemption() =>
       _host.requestBatteryOptimizationExemption();
 
-  Future<bool> isBatteryOptimizationIgnored() => _host.isBatteryOptimizationIgnored();
+  Future<bool> isBatteryOptimizationIgnored() =>
+      _host.isBatteryOptimizationIgnored();
 
-  // ----------------------------------------------------------------- 诊断
+  // ----------------------------------------------------------------- Diagnostics
 
-  /// §11.6 隐藏入口要展示的全部内容。
+  /// §11.6 Complete contents for the hidden diagnostics screen.
   Future<ShellDiagnostics> getDiagnostics() => _host.getDiagnostics();
 
-  /// §11.6 导出成可复制的纯文本。
+  /// §11.6 Export diagnostics as copyable plain text.
   Future<String> exportDiagnostics() => _host.exportDiagnostics();
 
-  /// §8.1 / §11.7 内核版本。低于 92 时 [KernelInfo.verdict] 为
-  /// [KernelVerdict.belowMinimum]，按 §11.7 一次性提示用户更新，不要阻断启动。
+  /// §8.1 / §11.7 Engine version. Versions below 92 produce [KernelVerdict.belowMinimum]
+  /// in [KernelInfo.verdict]. Under §11.7, show update guidance once without blocking startup.
   Future<KernelInfo> getKernelInfo() => _host.getKernelInfo();
 
-  /// §1.3 注入自检：读 `document.documentElement.classList.contains('is-web-browser')`，
-  /// 必须为 false。只要它是 true，无论 `__SSG_SHELL__` 打印出什么都算失败。
+  /// §1.3 Injection check: read `document.documentElement.classList.contains('is-web-browser')`.
+  /// It must be false. A true result fails regardless of the contents of `__SSG_SHELL__`.
   Future<bool> verifyInjection() => _host.verifyInjection();
 
-  /// 调试用。禁止用它清存储（§8.3），原生会拦掉已知的清理调用并抛错。
-  Future<String> evaluateJavaScript(String script) => _host.evaluateJavaScript(script);
+  /// Debugging only. Do not clear storage (§8.3); native code throws for known storage-clearing calls.
+  Future<String> evaluateJavaScript(String script) =>
+      _host.evaluateJavaScript(script);
 
   // --------------------------------------------------- SsgShellFlutterApi
 
@@ -259,9 +262,12 @@ class SsgShell implements SsgShellFlutterApi {
       case WebEventName.webReady:
         _webReady = true;
       case WebEventName.login:
-        _loggedIn = true;
-        _uid = event.uid ?? _uid;
-        _maybeRequestNotification();
+        final uid = event.uid;
+        if (uid != null && uid.trim().isNotEmpty) {
+          _loggedIn = true;
+          _uid = uid;
+          _maybeRequestNotification();
+        }
       case WebEventName.logout:
         _loggedIn = false;
         _uid = null;
@@ -270,8 +276,8 @@ class SsgShell implements SsgShellFlutterApi {
       case WebEventName.chatOpen:
         _activeChatId = event.chatId;
       case WebEventName.chatClose:
-        // 切到别的会话时 Web 会先发 chatOpen 再发上一个的 chatClose，
-        // 所以只有「关的正是当前这个」才清空。
+        // When changing conversations, the Web application can emit chatOpen before the previous chatClose;
+        // clear the active conversation only when the close event matches it.
         if (_activeChatId == event.chatId) _activeChatId = null;
       case WebEventName.unreadCount:
         _unreadCount = event.unreadCount ?? _unreadCount;
@@ -291,8 +297,11 @@ class SsgShell implements SsgShellFlutterApi {
 
   @override
   void onShellEvent(ShellEvent event) {
-    // 页面重新加载（reload、重建、被踢下线后刷新）时 Web 不会发 chatClose，
-    // 原生在页面开始加载时会清掉记住的 chatId（§5.4），这边跟着清。
+    if (event.type == ShellEventType.foreground && _loggedIn) {
+      _maybeRequestNotification();
+    }
+    // The Web application does not emit chatClose on reload, recreation, or refresh after logout.
+    // Native code clears the tracked chatId when loading starts (§5.4); clear the Dart copy too.
     if (event.type == ShellEventType.reloadIssued ||
         event.type == ShellEventType.webViewRecreated ||
         event.type == ShellEventType.renderProcessGone) {
@@ -302,18 +311,38 @@ class SsgShell implements SsgShellFlutterApi {
     if (!_shellEvents.isClosed) _shellEvents.add(event);
   }
 
-  /// §6.2 通知权限：收到 `eventLogin` 之后才申请，且只申请一次。
+  /// §6.2 Request notification permission only after `eventLogin`, and only once.
   void _maybeRequestNotification() {
-    if (!_requestNotificationAfterLogin || _notificationRequested) return;
+    if (!_requestNotificationAfterLogin ||
+        _notificationRequested ||
+        !_loggedIn) {
+      return;
+    }
     _notificationRequested = true;
     Future<void>(() async {
+      if (!_loggedIn) {
+        _notificationRequested = false;
+        return;
+      }
       final current = await _host.getNotificationPermission();
-      // 已经授权、或已被永久拒绝（多数系统不允许二次申请）时不再打扰用户。
-      if (current != NotificationPermission.notDetermined) return;
-      await _host.requestNotificationPermission();
+      if (!_loggedIn) {
+        _notificationRequested = false;
+        return;
+      }
+      if (current == NotificationPermission.granted) return;
+      // Native code decides between the system prompt and Settings guidance
+      // (denied, permanently denied, or the app-wide switch turned off), so a
+      // user who once declined is not left silently without push. This runs at
+      // most once per process: denied results do not reset the flag below.
+      final result = await _host.requestNotificationPermission();
+      // No foreground Activity (or a logout racing this request) can leave the
+      // permission undecided. Retry after login on a later foreground event.
+      if (result == NotificationPermission.notDetermined) {
+        _notificationRequested = false;
+      }
     }).catchError((Object error) {
       _notificationRequested = false;
-      debugPrint('SsgShell: 申请通知权限失败 $error');
+      debugPrint('SsgShell: Notification permission request failed $error');
     });
   }
 }

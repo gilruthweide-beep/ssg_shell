@@ -132,14 +132,14 @@ func deepHashMessages(value: Any?, hasher: inout Hasher) {
 
     
 
-/// §1.1 `platform`，只接受这两个取值。
+/// §1.1 Accepted values for `platform`.
 enum ShellPlatform: Int {
   case android = 0
   case ios = 1
 }
 
-/// §4 `onNetwork(type)` 的取值。`none` 不会转发给 Web（会被忽略），
-/// 保留它只是为了让原生侧的网络状态可以完整表达。
+/// §4 Values for `onNetwork(type)`. `none` is not forwarded to the Web application because it would be ignored;
+/// it is retained to represent the full native network state.
 enum NetworkType: Int {
   case wifi = 0
   case cellular = 1
@@ -148,8 +148,8 @@ enum NetworkType: Int {
   case none = 4
 }
 
-/// §3.1 的十个事件。`unknown` 用于 Web 将来新增事件时的前向兼容：
-/// 原始字符串仍然保留在 [WebEvent.rawName] 里。
+/// §3.1 Ten Web events. `unknown` allows forward compatibility when the Web application adds new events:
+/// the original string remains available in [WebEvent.rawName].
 enum WebEventName: Int {
   case webReady = 0
   case register = 1
@@ -164,7 +164,7 @@ enum WebEventName: Int {
   case unknown = 10
 }
 
-/// §11.6 console 转发的级别。
+/// §11.6 Levels used when forwarding console output.
 enum ConsoleLevel: Int {
   case debug = 0
   case log = 1
@@ -173,7 +173,7 @@ enum ConsoleLevel: Int {
   case error = 4
 }
 
-/// §6.2 通知权限。`permanentlyDenied` 时要走 §6.2 的二次引导。
+/// §6.2 Notification permission. `permanentlyDenied` requires the settings guidance described in §6.2.
 enum NotificationPermission: Int {
   case notDetermined = 0
   case granted = 1
@@ -182,7 +182,7 @@ enum NotificationPermission: Int {
   case notSupported = 4
 }
 
-/// §8.1 / §11.7 内核版本判定。
+/// §8.1 / §11.7 WebView engine compatibility status.
 enum KernelVerdict: Int {
   case ok = 0
   case belowRecommended = 1
@@ -190,96 +190,96 @@ enum KernelVerdict: Int {
   case unknown = 3
 }
 
-/// 原生侧发生的事情，由 [SsgShellFlutterApi.onShellEvent] 上抛给 Dart。
+/// Native events forwarded to Dart through [SsgShellFlutterApi.onShellEvent].
 enum ShellEventType: Int {
-  /// §4 `onForeground()` 已调用。
+  /// §4 `onForeground()` was called.
   case foreground = 0
-  /// §4 `onBackground()` 已调用。
+  /// §4 `onBackground()` was called.
   case background = 1
-  /// §10.4 去抖之后、确认网络可用才发；`network` 字段带类型。
+  /// §10.4 Sent after debouncing and confirming network availability; `network` contains the connection type.
   case networkChanged = 2
-  /// §11.4 已向 Web 转发 `onMemoryWarning()`。
+  /// §11.4 `onMemoryWarning()` was forwarded to the Web application.
   case memoryWarning = 3
-  /// §9.6 收到 `eventWebReady`，splash 已撤。
+  /// §9.6 `eventWebReady` arrived and the splash was removed.
   case splashDismissed = 4
-  /// §9.6 splash 到达上限（默认 30 秒）被强制撤除。
+  /// §9.6 The splash reached its maximum duration (30 seconds by default) and was removed.
   case splashTimedOut = 5
-  /// §9.6 首屏加载失败，已切到原生重试页。
+  /// §9.6 Initial page loading failed and the native retry screen was shown.
   case loadFailed = 6
-  /// §7.1 `onRenderProcessGone` / `webViewWebContentProcessDidTerminate`。
+  /// §7.1 `onRenderProcessGone` / `webViewWebContentProcessDidTerminate`.
   case renderProcessGone = 7
-  /// §11.2 判定卡死。
+  /// §11.2 The page was identified as unresponsive.
   case stallDetected = 8
-  /// §11.2 已执行 `reload()`。
+  /// §11.2 `reload()` was executed.
   case reloadIssued = 9
-  /// §11.2 reload 无效，已销毁重建 WebView。
+  /// §11.2 Reload did not recover the page, so the WebView was destroyed and recreated.
   case webViewRecreated = 10
-  /// §11.2.5 处于退避窗口内，本次卡死不处理。
+  /// §11.2.5 Recovery was skipped because the backoff window is active.
   case recoveryThrottled = 11
-  /// IM 容器已显示。
+  /// The IM container is visible.
   case imOpened = 12
-  /// IM 容器已关闭 / 退到后台。
+  /// The IM container was closed or moved to the background.
   case imClosed = 13
-  /// §11.6 Web 的一条 console 输出。
+  /// §11.6 A Web console entry.
   case consoleMessage = 14
-  /// §1.3 注入自检结果；`extra['isWebBrowser']` 为 `'false'` 才算通过。
+  /// §1.3 Injection check result; only `extra['isWebBrowser'] == 'false'` passes.
   case injectionChecked = 15
-  /// §5.3 深链已交给 Web（`extra['chatId']`）。
+  /// §5.3 A deep link was delivered to the Web application (`extra['chatId']`).
   case deepLinkDelivered = 16
-  /// §5.3 深链被暂存，等 `eventWebReady`。
+  /// §5.3 A deep link is queued until `eventWebReady`.
   case deepLinkQueued = 17
 }
 
-/// 壳的全部可调参数。默认值在 Dart 侧的 `ShellConfig` 工厂里给，
-/// 原生侧只负责照单执行。
+/// All configurable shell parameters. Defaults are supplied by the Dart `ShellConfig` factory;
+/// native code uses those values directly.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct ShellConfigDto: Hashable {
-  /// §2.1 原样加载的完整落地 URL，可包含可选的 `channelcode` 查询参数。
+  /// §2.1 Complete landing URL, loaded unchanged, with an optional `channelcode` query parameter.
   var entryUrl: String
-  /// 旧版消息格式的兼容字段，已忽略；渠道码只通过入口 URL 传入。
+  /// Ignored legacy wire field; channel attribution is supplied only through the landing URL.
   var channelCode: String
-  /// §1.1 / §2.2 壳版本，同时进 `__SSG_SHELL__` 和 UA。
+  /// §1.1 / §2.2 Shell version used in `__SSG_SHELL__` and the user agent.
   var shellVersion: String
-  /// §9.6 B 面开关。原生会把它缓存到本地，下次冷启动不等 Dart。
+  /// §9.6 B-side switch, cached natively so the next cold start does not wait for Dart.
   var bSideEnabled: Bool
-  /// §9.6 splash 上限，建议 30000。
+  /// §9.6 Maximum splash duration; recommended value: 30000.
   var splashTimeoutMs: Int64
-  /// §11.1 原生心跳周期，规范值 20000。
+  /// §11.1 Native heartbeat interval; required value: 20000.
   var heartbeatIntervalMs: Int64
-  /// §11.2 多久没收到 `eventWebAlive` 判定卡死，规范值 60000。
+  /// §11.2 Timeout without `eventWebAlive` before declaring the page unresponsive; required value: 60000.
   var aliveTimeoutMs: Int64
-  /// §11.2.3 reload 后多久没开始加载就重建，规范值 10000。
+  /// §11.2.3 Timeout after reload without loading before recreation; required value: 10000.
   var reloadConfirmTimeoutMs: Int64
-  /// §11.2.5 第一次处理后的退避，规范值 180000。
+  /// §11.2.5 Initial recovery backoff; required value: 180000.
   var recoveryBackoffFirstMs: Int64
-  /// §11.2.5 之后的退避，规范值 600000。
+  /// §11.2.5 Subsequent recovery backoff; required value: 600000.
   var recoveryBackoffLaterMs: Int64
-  /// §10.4 网络回调去抖，规范区间 1000~2000。
+  /// §10.4 Network callback debounce interval; required range: 1000–2000.
   var networkDebounceMs: Int64
-  /// §5.4 前台抑制开关。
+  /// §5.4 Enable foreground notification suppression.
   var suppressForegroundNotifications: Bool
-  /// §5.4 是否由插件按 `unreadCount` 设角标。
+  /// §5.4 Let the plugin update the badge from `unreadCount`.
   var manageBadge: Bool
-  /// §8.1 硬性下限，92。
+  /// §8.1 Minimum supported engine version: 92.
   var minKernelVersion: Int64
-  /// §8.1 推荐值，110。
+  /// §8.1 Recommended engine version: 110.
   var recommendedKernelVersion: Int64
-  /// §11.6 console 环形缓冲条数。
+  /// §11.6 Console ring buffer capacity.
   var consoleBufferSize: Int64
-  /// §8.4 / §9.4 WebView 与窗口背景色，规范要求白色 0xFFFFFFFF。
+  /// §8.4 / §9.4 WebView and window background; required color: white, 0xFFFFFFFF.
   var backgroundColorArgb: Int64
-  /// §11.6 是否把 Web 的 console 转发到原生日志与 Dart。
+  /// §11.6 Forward Web console output to native logs and Dart.
   var forwardConsole: Bool
-  /// WebView 铺满整个窗口，不摆进安全区。
+  /// Allow the WebView to fill the window instead of placing it within the safe area.
   ///
-  /// **这是对 §9.4 的偏离**，默认关。规范要求原生把 WebView 摆在状态栏 / 刘海 / 灵动岛
-  /// 以下、Home 指示条（Android 为导航栏）以上，页面里读 `env(safe-area-inset-*)` 必须
-  /// 为 0 —— §12.2 的「安全区」自测就是看这个。打开它之后那一项不再成立，页面要自己
-  /// 按 `env()` 留白。
+  /// **Deviates from §9.4 and is disabled by default.** The specification places the WebView below the status bar, notch,
+  /// or Dynamic Island and above the home indicator (navigation bar on Android). The page must read zero
+  /// for `env(safe-area-inset-*)`, as checked by the §12.2 safe-area test. When enabled, the page must
+  /// apply its own padding using `env()`.
   ///
-  /// 键盘不受影响：打开它时原生仍然消费 ime 的 inset（§9.2 要求输入框紧贴键盘、
-  /// 完整可见），只是不再消费 systemBars 和 displayCutout。
+  /// Keyboard behavior is unchanged: native code still consumes IME insets to keep the input visible above the keyboard (§9.2),
+  /// but it no longer consumes systemBars and displayCutout insets.
   var webViewFullscreen: Bool
 
 
@@ -357,7 +357,7 @@ struct ShellConfigDto: Hashable {
   }
 }
 
-/// §1.1 实际注入到 `window.__SSG_SHELL__` 的六个字段。
+/// §1.1 The six fields injected into `window.__SSG_SHELL__`.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct ShellInfo: Hashable {
@@ -404,26 +404,26 @@ struct ShellInfo: Hashable {
   }
 }
 
-/// §3.1 一条 Web → Native 事件。
+/// §3.1 A Web → Native event.
 ///
-/// 规范规定 params 全是字符串，所以原始内容完整保留在 [params] 里；
-/// 常用字段额外做了类型化，避免每个调用点自己解析。
+/// The specification requires string parameters, so [params] retains the complete original values;
+/// common fields also have typed accessors to avoid repeated parsing at call sites.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct WebEvent: Hashable {
   var name: WebEventName
-  /// Web 原样发来的 `eventName`。
+  /// The original `eventName` from the Web application.
   var rawName: String
-  /// 原生收到的时刻（原生时钟，毫秒）。
+  /// Native reception time in milliseconds, measured by the native clock.
   var receivedAtMs: Int64
-  /// 原样的 `params`。
+  /// The original `params`.
   var params: [String: String]
   var uid: String? = nil
   var channelCode: String? = nil
   var chatId: String? = nil
-  /// `unreadCount` 事件的 `count`，已解析成数字。
+  /// The parsed numeric `count` from an `unreadCount` event.
   var unreadCount: Int64? = nil
-  /// Web 给的 `timestamp`（字符串，可能不是数字）。
+  /// The Web-supplied `timestamp` string, which may not be numeric.
   var webTimestamp: String? = nil
 
 
@@ -471,13 +471,13 @@ struct WebEvent: Hashable {
   }
 }
 
-/// §5.3 打开会话。
+/// §5.3 Open a conversation.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct OpenChatRequest: Hashable {
-  /// 字符串形式：私聊为对方 uid，群和频道为负数 id。
+  /// String identifier: the peer uid for private chats, or a negative id for groups and channels.
   var chatId: String
-  /// 可省略；省略时只打开会话，不定位消息。
+  /// Optional; omit to open the conversation without locating a specific message.
   var messageId: String? = nil
 
 
@@ -504,8 +504,8 @@ struct OpenChatRequest: Hashable {
   }
 }
 
-/// §5.3 OneSignal 下发的 `data`。字段名兼容 `chat_id` / `chatId` 两种写法，
-/// 解析在 Dart 侧的 `parsePushData()` 里做（`lib/src/push.dart`）。
+/// §5.3 OneSignal `data`, accepting both `chat_id` and `chatId` field names.
+/// Parsed by Dart's `parsePushData()` in `lib/src/push.dart`.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct PushMessage: Hashable {
@@ -544,16 +544,16 @@ struct PushMessage: Hashable {
   }
 }
 
-/// [SsgShellHostApi.handlePushReceived] 的结果。
+/// The result of [SsgShellHostApi.handlePushReceived].
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct PushDecision: Hashable {
-  /// §5.4 true 表示用户正停在这个会话里，不要展示系统通知。
+  /// §5.4 True when the user is viewing this conversation and the system notification should be suppressed.
   var suppressNotification: Bool
-  /// §11.3 true 表示已调过一次 `onNetwork()` 把 Web 捅醒。
+  /// §11.3 True when `onNetwork()` was called to wake the Web connection.
   var nudgedWeb: Bool
   var appInForeground: Bool
-  /// 给日志用的人类可读理由。
+  /// Human-readable reason for logging.
   var reason: String
 
 
@@ -586,16 +586,16 @@ struct PushDecision: Hashable {
   }
 }
 
-/// §8.1 / §11.7 内核信息。
+/// §8.1 / §11.7 WebView engine information.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct KernelInfo: Hashable {
   var verdict: KernelVerdict
-  /// 完整版本号，如 `120.0.6099.230`；取不到时为空串。
+  /// Full version string, such as `120.0.6099.230`; empty when unavailable.
   var versionName: String
-  /// 主版本号，取不到时为 -1。
+  /// Major version, or -1 when unavailable.
   var majorVersion: Int64
-  /// Android 为 WebView 实现包名（`com.google.android.webview` 等）；iOS 为空串。
+  /// Android WebView implementation package, such as `com.google.android.webview`; empty on iOS.
   var packageName: String
 
 
@@ -628,7 +628,7 @@ struct KernelInfo: Hashable {
   }
 }
 
-/// §11.6 一条 console 记录。
+/// §11.6 A console entry.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct ConsoleRecord: Hashable {
@@ -671,7 +671,7 @@ struct ConsoleRecord: Hashable {
   }
 }
 
-/// §11.6 隐藏诊断入口要展示 / 导出的全部内容。
+/// §11.6 Complete contents displayed or exported by the hidden diagnostics screen.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct ShellDiagnostics: Hashable {
@@ -679,25 +679,25 @@ struct ShellDiagnostics: Hashable {
   var entryUrl: String
   var currentUrl: String
   var userAgent: String
-  /// 最近一次 Web 注册、登录或发消息事件携带的渠道码。
+  /// Channel code from the most recent Web registration, login, or message-sent event.
   ///
-  /// 为空表示尚未收到归因事件或 Web 未提供渠道码；渠道归因是可选的。
+  /// Empty when no attribution event or channel code is available; attribution is optional.
   var channelCode: String
-  /// §1.3 自检：`document.documentElement.classList.contains('is-web-browser') === false`。
+  /// §1.3 Injection check: `document.documentElement.classList.contains('is-web-browser') === false`.
   var injectionOk: Bool
   var imRunning: Bool
   var appInForeground: Bool
   var reloadCount: Int64
   var recreateCount: Int64
-  /// §5.4 当前角标数。
+  /// §5.4 Current badge count.
   var badgeCount: Int64
   var kernel: KernelInfo
-  /// §11.6 最近 N 条 console。
+  /// §11.6 Most recent N console entries.
   var consoleTail: [ConsoleRecord]
   var lastReloadAtMs: Int64? = nil
   var lastWebReadyAtMs: Int64? = nil
   var lastWebAliveAtMs: Int64? = nil
-  /// §5.4 原生记住的最近一次 `chatOpen` 的 chatId。
+  /// §5.4 The most recent `chatOpen` chatId remembered by native code.
   var trackedChatId: String? = nil
 
 
@@ -769,7 +769,7 @@ struct ShellDiagnostics: Hashable {
   }
 }
 
-/// 原生侧事件。
+/// A native event.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct ShellEvent: Hashable {
@@ -963,55 +963,55 @@ class MessagesPigeonCodec: FlutterStandardMessageCodec, @unchecked Sendable {
 
 /// Generated protocol from Pigeon that represents a handler of messages from Flutter.
 protocol SsgShellHostApi {
-  /// 必须最先调。原生据此落盘配置（§9.6 的 B 面缓存也在这里更新），
-  /// 并按 §1.1 组装 `__SSG_SHELL__`。重复调用会覆盖配置，但不会重建 WebView。
+  /// Must be called first. Native code persists the configuration, including the §9.6 B-side cache,
+  /// and builds `__SSG_SHELL__` for §1.1. Repeated calls update configuration without recreating the WebView.
   func initialize(config: ShellConfigDto) throws -> ShellInfo
-  /// §8.4 体验与性能 1：提前创建 WebView 并开始加载入口地址。
-  /// B 面未开启时是空操作。幂等。
+  /// §8.4 Performance 1: create the WebView and start loading the landing URL in advance.
+  /// An idempotent no-op when B side is disabled.
   func preload() throws
-  /// 打开 IM 容器：Android `startActivity(ImActivity)`，iOS present 全屏 VC。
-  /// 已经在前台时是空操作。
+  /// Open the IM container: Android starts `ImActivity`; iOS presents a fullscreen view controller.
+  /// A no-op when the container is already in the foreground.
   func openIm() throws
-  /// 关闭 IM 容器。按 §10.6，**不会**销毁 WebView 实例。
+  /// Close the IM container without destroying the WebView instance, as required by §10.6.
   func closeIm() throws
   func isImRunning() throws -> Bool
-  /// §9.6 更新 B 面开关并落盘，下次冷启动原生直接按缓存走，不等 Dart。
+  /// §9.6 Update and persist the B-side switch so the next native cold start uses the cache without waiting for Dart.
   func setBSideEnabled(enabled: Bool) throws
   func isBSideEnabled() throws -> Bool
-  /// §5.3 打开会话。Web 还没发 `eventWebReady` 时自动暂存，就绪后补发，
-  /// 只调一次，不重试。
+  /// §5.3 Open a conversation. Queue the request until `eventWebReady` if needed,
+  /// then deliver it once without retrying.
   func openChat(request: OpenChatRequest) throws
-  /// §5.4 + §11.3 推送到达时调。返回「要不要展示通知」以及有没有捅醒 Web。
-  /// 原生自己判断前台状态，Dart 不需要传。
+  /// §5.4 + §11.3 Call when a push arrives. Returns the notification display decision and whether the Web connection was nudged.
+  /// Native code determines foreground state; Dart does not need to supply it.
   func handlePushReceived(message: PushMessage) throws -> PushDecision
-  /// §5.3 通知被点击时调。会按需 `openIm()` 并把参数排队，等 `eventWebReady`。
+  /// §5.3 Call when a notification is clicked. Opens IM if needed and queues the payload until `eventWebReady`.
   func handlePushOpened(message: PushMessage) throws
-  /// §10.4 / §11.3 手动调一次 `onNetwork(type)`。`none` 会被丢弃。
+  /// §10.4 / §11.3 Manually call `onNetwork(type)` once; `none` is discarded.
   func nudgeNetwork(type: NetworkType) throws
-  /// §11.2 手动触发兜底 reload（调试与诊断入口用）。
+  /// §11.2 Trigger a recovery reload manually for debugging and diagnostics.
   func reloadWeb() throws
-  /// §11.2.3 手动销毁重建 WebView（Android 会先结束渲染进程）。
+  /// §11.2.3 Destroy and recreate the WebView manually; Android terminates the renderer first.
   func recreateWebView() throws
-  /// §5.4 设角标。`manageBadge` 为 true 时插件已自动按 `unreadCount` 设，
-  /// 这里留给需要自己接管的场合。
+  /// §5.4 Set the badge count. With `manageBadge` enabled the plugin already updates it from `unreadCount`;
+  /// this method allows the host to take over badge management.
   func setBadgeCount(count: Int64) throws
   func getDiagnostics() throws -> ShellDiagnostics
-  /// §11.6 导出成可复制的纯文本。
+  /// §11.6 Export diagnostics as copyable plain text.
   func exportDiagnostics() throws -> String
-  /// §8.1 / §11.7 读内核版本。
+  /// §8.1 / §11.7 Read the WebView engine version.
   func getKernelInfo() throws -> KernelInfo
   func getNotificationPermission() throws -> NotificationPermission
-  /// §6.2 只在收到 `eventLogin` 之后调。启动期调用会被原生拒掉并返回当前状态。
+  /// §6.2 Call only after `eventLogin`. Native code rejects startup requests and returns the current permission state.
   func requestNotificationPermission(completion: @escaping (Result<NotificationPermission, Error>) -> Void)
-  /// §6.2 权限被永久拒绝后的二次引导：拉起系统设置页。
+  /// §6.2 Open system settings to guide the user after permission is permanently denied.
   func openSystemSettings() throws
-  /// §10.3 Android 申请电池优化白名单（规范要求不在首启弹）。iOS 空操作返回 true。
+  /// §10.3 Request exemption from Android battery optimization outside the first launch. On iOS, return true without action.
   func requestBatteryOptimizationExemption(completion: @escaping (Result<Bool, Error>) -> Void)
   func isBatteryOptimizationIgnored() throws -> Bool
-  /// §1.3 跑一次注入自检，读 `is-web-browser` class。
+  /// §1.3 Run the injection check by reading the `is-web-browser` class.
   func verifyInjection(completion: @escaping (Result<Bool, Error>) -> Void)
-  /// 调试用：在 Web 里执行一段 JS 并返回结果字符串。
-  /// 禁止用它清存储（§8.3），插件会拦掉已知的清理调用。
+  /// Debugging: execute JavaScript in the WebView and return its result as a string.
+  /// Do not clear storage (§8.3); the plugin blocks known storage-clearing calls.
   func evaluateJavaScript(script: String, completion: @escaping (Result<String, Error>) -> Void)
 }
 
@@ -1021,8 +1021,8 @@ class SsgShellHostApiSetup {
   /// Sets up an instance of `SsgShellHostApi` to handle messages through the `binaryMessenger`.
   static func setUp(binaryMessenger: FlutterBinaryMessenger, api: SsgShellHostApi?, messageChannelSuffix: String = "") {
     let channelSuffix = messageChannelSuffix.count > 0 ? ".\(messageChannelSuffix)" : ""
-    /// 必须最先调。原生据此落盘配置（§9.6 的 B 面缓存也在这里更新），
-    /// 并按 §1.1 组装 `__SSG_SHELL__`。重复调用会覆盖配置，但不会重建 WebView。
+    /// Must be called first. Native code persists the configuration, including the §9.6 B-side cache,
+    /// and builds `__SSG_SHELL__` for §1.1. Repeated calls update configuration without recreating the WebView.
     let initializeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.initialize\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       initializeChannel.setMessageHandler { message, reply in
@@ -1038,8 +1038,8 @@ class SsgShellHostApiSetup {
     } else {
       initializeChannel.setMessageHandler(nil)
     }
-    /// §8.4 体验与性能 1：提前创建 WebView 并开始加载入口地址。
-    /// B 面未开启时是空操作。幂等。
+    /// §8.4 Performance 1: create the WebView and start loading the landing URL in advance.
+    /// An idempotent no-op when B side is disabled.
     let preloadChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.preload\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       preloadChannel.setMessageHandler { _, reply in
@@ -1053,8 +1053,8 @@ class SsgShellHostApiSetup {
     } else {
       preloadChannel.setMessageHandler(nil)
     }
-    /// 打开 IM 容器：Android `startActivity(ImActivity)`，iOS present 全屏 VC。
-    /// 已经在前台时是空操作。
+    /// Open the IM container: Android starts `ImActivity`; iOS presents a fullscreen view controller.
+    /// A no-op when the container is already in the foreground.
     let openImChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.openIm\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       openImChannel.setMessageHandler { _, reply in
@@ -1068,7 +1068,7 @@ class SsgShellHostApiSetup {
     } else {
       openImChannel.setMessageHandler(nil)
     }
-    /// 关闭 IM 容器。按 §10.6，**不会**销毁 WebView 实例。
+    /// Close the IM container without destroying the WebView instance, as required by §10.6.
     let closeImChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.closeIm\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       closeImChannel.setMessageHandler { _, reply in
@@ -1095,7 +1095,7 @@ class SsgShellHostApiSetup {
     } else {
       isImRunningChannel.setMessageHandler(nil)
     }
-    /// §9.6 更新 B 面开关并落盘，下次冷启动原生直接按缓存走，不等 Dart。
+    /// §9.6 Update and persist the B-side switch so the next native cold start uses the cache without waiting for Dart.
     let setBSideEnabledChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.setBSideEnabled\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       setBSideEnabledChannel.setMessageHandler { message, reply in
@@ -1124,8 +1124,8 @@ class SsgShellHostApiSetup {
     } else {
       isBSideEnabledChannel.setMessageHandler(nil)
     }
-    /// §5.3 打开会话。Web 还没发 `eventWebReady` 时自动暂存，就绪后补发，
-    /// 只调一次，不重试。
+    /// §5.3 Open a conversation. Queue the request until `eventWebReady` if needed,
+    /// then deliver it once without retrying.
     let openChatChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.openChat\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       openChatChannel.setMessageHandler { message, reply in
@@ -1141,8 +1141,8 @@ class SsgShellHostApiSetup {
     } else {
       openChatChannel.setMessageHandler(nil)
     }
-    /// §5.4 + §11.3 推送到达时调。返回「要不要展示通知」以及有没有捅醒 Web。
-    /// 原生自己判断前台状态，Dart 不需要传。
+    /// §5.4 + §11.3 Call when a push arrives. Returns the notification display decision and whether the Web connection was nudged.
+    /// Native code determines foreground state; Dart does not need to supply it.
     let handlePushReceivedChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.handlePushReceived\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       handlePushReceivedChannel.setMessageHandler { message, reply in
@@ -1158,7 +1158,7 @@ class SsgShellHostApiSetup {
     } else {
       handlePushReceivedChannel.setMessageHandler(nil)
     }
-    /// §5.3 通知被点击时调。会按需 `openIm()` 并把参数排队，等 `eventWebReady`。
+    /// §5.3 Call when a notification is clicked. Opens IM if needed and queues the payload until `eventWebReady`.
     let handlePushOpenedChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.handlePushOpened\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       handlePushOpenedChannel.setMessageHandler { message, reply in
@@ -1174,7 +1174,7 @@ class SsgShellHostApiSetup {
     } else {
       handlePushOpenedChannel.setMessageHandler(nil)
     }
-    /// §10.4 / §11.3 手动调一次 `onNetwork(type)`。`none` 会被丢弃。
+    /// §10.4 / §11.3 Manually call `onNetwork(type)` once; `none` is discarded.
     let nudgeNetworkChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.nudgeNetwork\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       nudgeNetworkChannel.setMessageHandler { message, reply in
@@ -1190,7 +1190,7 @@ class SsgShellHostApiSetup {
     } else {
       nudgeNetworkChannel.setMessageHandler(nil)
     }
-    /// §11.2 手动触发兜底 reload（调试与诊断入口用）。
+    /// §11.2 Trigger a recovery reload manually for debugging and diagnostics.
     let reloadWebChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.reloadWeb\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       reloadWebChannel.setMessageHandler { _, reply in
@@ -1204,7 +1204,7 @@ class SsgShellHostApiSetup {
     } else {
       reloadWebChannel.setMessageHandler(nil)
     }
-    /// §11.2.3 手动销毁重建 WebView（Android 会先结束渲染进程）。
+    /// §11.2.3 Destroy and recreate the WebView manually; Android terminates the renderer first.
     let recreateWebViewChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.recreateWebView\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       recreateWebViewChannel.setMessageHandler { _, reply in
@@ -1218,8 +1218,8 @@ class SsgShellHostApiSetup {
     } else {
       recreateWebViewChannel.setMessageHandler(nil)
     }
-    /// §5.4 设角标。`manageBadge` 为 true 时插件已自动按 `unreadCount` 设，
-    /// 这里留给需要自己接管的场合。
+    /// §5.4 Set the badge count. With `manageBadge` enabled the plugin already updates it from `unreadCount`;
+    /// this method allows the host to take over badge management.
     let setBadgeCountChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.setBadgeCount\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       setBadgeCountChannel.setMessageHandler { message, reply in
@@ -1248,7 +1248,7 @@ class SsgShellHostApiSetup {
     } else {
       getDiagnosticsChannel.setMessageHandler(nil)
     }
-    /// §11.6 导出成可复制的纯文本。
+    /// §11.6 Export diagnostics as copyable plain text.
     let exportDiagnosticsChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.exportDiagnostics\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       exportDiagnosticsChannel.setMessageHandler { _, reply in
@@ -1262,7 +1262,7 @@ class SsgShellHostApiSetup {
     } else {
       exportDiagnosticsChannel.setMessageHandler(nil)
     }
-    /// §8.1 / §11.7 读内核版本。
+    /// §8.1 / §11.7 Read the WebView engine version.
     let getKernelInfoChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.getKernelInfo\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       getKernelInfoChannel.setMessageHandler { _, reply in
@@ -1289,7 +1289,7 @@ class SsgShellHostApiSetup {
     } else {
       getNotificationPermissionChannel.setMessageHandler(nil)
     }
-    /// §6.2 只在收到 `eventLogin` 之后调。启动期调用会被原生拒掉并返回当前状态。
+    /// §6.2 Call only after `eventLogin`. Native code rejects startup requests and returns the current permission state.
     let requestNotificationPermissionChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.requestNotificationPermission\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       requestNotificationPermissionChannel.setMessageHandler { _, reply in
@@ -1305,7 +1305,7 @@ class SsgShellHostApiSetup {
     } else {
       requestNotificationPermissionChannel.setMessageHandler(nil)
     }
-    /// §6.2 权限被永久拒绝后的二次引导：拉起系统设置页。
+    /// §6.2 Open system settings to guide the user after permission is permanently denied.
     let openSystemSettingsChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.openSystemSettings\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       openSystemSettingsChannel.setMessageHandler { _, reply in
@@ -1319,7 +1319,7 @@ class SsgShellHostApiSetup {
     } else {
       openSystemSettingsChannel.setMessageHandler(nil)
     }
-    /// §10.3 Android 申请电池优化白名单（规范要求不在首启弹）。iOS 空操作返回 true。
+    /// §10.3 Request exemption from Android battery optimization outside the first launch. On iOS, return true without action.
     let requestBatteryOptimizationExemptionChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.requestBatteryOptimizationExemption\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       requestBatteryOptimizationExemptionChannel.setMessageHandler { _, reply in
@@ -1348,7 +1348,7 @@ class SsgShellHostApiSetup {
     } else {
       isBatteryOptimizationIgnoredChannel.setMessageHandler(nil)
     }
-    /// §1.3 跑一次注入自检，读 `is-web-browser` class。
+    /// §1.3 Run the injection check by reading the `is-web-browser` class.
     let verifyInjectionChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.verifyInjection\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       verifyInjectionChannel.setMessageHandler { _, reply in
@@ -1364,8 +1364,8 @@ class SsgShellHostApiSetup {
     } else {
       verifyInjectionChannel.setMessageHandler(nil)
     }
-    /// 调试用：在 Web 里执行一段 JS 并返回结果字符串。
-    /// 禁止用它清存储（§8.3），插件会拦掉已知的清理调用。
+    /// Debugging: execute JavaScript in the WebView and return its result as a string.
+    /// Do not clear storage (§8.3); the plugin blocks known storage-clearing calls.
     let evaluateJavaScriptChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.ssg_shell.SsgShellHostApi.evaluateJavaScript\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       evaluateJavaScriptChannel.setMessageHandler { message, reply in
@@ -1387,9 +1387,9 @@ class SsgShellHostApiSetup {
 }
 /// Generated protocol from Pigeon that represents Flutter messages that can be called from Swift.
 protocol SsgShellFlutterApiProtocol {
-  /// §3.1 的十个事件，原生收到后原样上抛。
+  /// §3.1 Forward all ten Web events unchanged after native reception.
   func onWebEvent(event eventArg: WebEvent, completion: @escaping (Result<Void, PigeonError>) -> Void)
-  /// 原生侧的生命周期、恢复动作、console 转发。
+  /// Native lifecycle events, recovery actions, and console forwarding.
   func onShellEvent(event eventArg: ShellEvent, completion: @escaping (Result<Void, PigeonError>) -> Void)
 }
 class SsgShellFlutterApi: SsgShellFlutterApiProtocol {
@@ -1402,7 +1402,7 @@ class SsgShellFlutterApi: SsgShellFlutterApiProtocol {
   var codec: MessagesPigeonCodec {
     return MessagesPigeonCodec.shared
   }
-  /// §3.1 的十个事件，原生收到后原样上抛。
+  /// §3.1 Forward all ten Web events unchanged after native reception.
   func onWebEvent(event eventArg: WebEvent, completion: @escaping (Result<Void, PigeonError>) -> Void) {
     let channelName: String = "dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onWebEvent\(messageChannelSuffix)"
     let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
@@ -1421,7 +1421,7 @@ class SsgShellFlutterApi: SsgShellFlutterApiProtocol {
       }
     }
   }
-  /// 原生侧的生命周期、恢复动作、console 转发。
+  /// Native lifecycle events, recovery actions, and console forwarding.
   func onShellEvent(event eventArg: ShellEvent, completion: @escaping (Result<Void, PigeonError>) -> Void) {
     let channelName: String = "dev.flutter.pigeon.ssg_shell.SsgShellFlutterApi.onShellEvent\(messageChannelSuffix)"
     let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)

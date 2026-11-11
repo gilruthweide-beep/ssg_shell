@@ -2,9 +2,9 @@ import Foundation
 import UIKit
 import WebKit
 
-/// §7.2 `WKNavigationDelegate` 回调。
+/// §7.2 WKNavigationDelegate callbacks.
 ///
-/// 这里每一项不实现都表现为某个功能「点了没反应」或者干脆白屏，而 Web 侧看不到错误。
+/// Missing callbacks leave features unresponsive or blank without exposing errors to the Web application.
 final class ShellNavigationDelegate: NSObject, WKNavigationDelegate {
 
   private let entryHost: String?
@@ -16,10 +16,10 @@ final class ShellNavigationDelegate: NSObject, WKNavigationDelegate {
     super.init()
   }
 
-  /// §7.2 外链走 `UIApplication.open`，不实现的话外链在 WebView 里打开，用户出不来。
+  /// §7.2 Delegate external links through UIApplication.open instead of trapping navigation inside the WebView.
   ///
-  /// 同源 HTTPS 必须**原样放行**，不做改写、重定向或拦截。
-  /// `blob:` / `data:` 的导航不是外链，不要拦 —— 那是 Web 预览媒体的通道。
+  /// Allow same-origin HTTPS URLs unchanged, without rewriting, redirecting, or intercepting them.
+  /// `blob:` / `data:` navigations support Web media previews and must not be treated as external links.
   func webView(
     _ webView: WKWebView,
     decidePolicyFor navigationAction: WKNavigationAction,
@@ -36,7 +36,7 @@ final class ShellNavigationDelegate: NSObject, WKNavigationDelegate {
       return
     }
 
-    // iframe 里的跨域资源照常加载，只管主框架和新窗口。
+    // Allow cross-origin iframe resources; only handle main-frame and new-window navigation.
     let isMainFrameOrNewWindow = navigationAction.targetFrame?.isMainFrame ?? true
 
     if scheme == "http" || scheme == "https" {
@@ -49,13 +49,13 @@ final class ShellNavigationDelegate: NSObject, WKNavigationDelegate {
       return
     }
 
-    // tel:、mailto:、itms-apps: 等，一律交给系统。
+    // Delegate tel:, mailto:, itms-apps:, and similar links to the system.
     decisionHandler(.cancel)
     Self.openExternal(url)
   }
 
   func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-    // §11.2.3 reload 是否真的生效，就看有没有走到这里。
+    // §11.2.3 Reaching this callback confirms that reload actually started loading.
     ShellCore.shared.onPageStarted(webView.url?.absoluteString)
   }
 
@@ -63,7 +63,7 @@ final class ShellNavigationDelegate: NSObject, WKNavigationDelegate {
     ShellCore.shared.onPageFinished(webView.url?.absoluteString)
   }
 
-  /// §7.2 首屏加载失败重试，不实现就停在白屏。
+  /// §7.2 Retry initial-load failures instead of leaving a blank page.
   func webView(
     _ webView: WKWebView,
     didFailProvisionalNavigation navigation: WKNavigation!,
@@ -76,11 +76,11 @@ final class ShellNavigationDelegate: NSObject, WKNavigationDelegate {
     report(error, url: webView.url)
   }
 
-  /// §9.6 SSL 错误不要无脑信任，也不要静默失败停在白屏。
+  /// §9.6 Do not trust invalid SSL certificates or fail silently into a blank page.
   ///
-  /// 这里交回系统默认处理：证书有问题时导航会以
-  /// `NSURLErrorServerCertificateUntrusted` 失败，然后走上面的 `didFail*`，
-  /// 由 `ShellCore` 弹原生重试页给用户看得见的提示。
+  /// Let the system perform default certificate validation. Invalid certificates fail navigation with
+  /// NSURLErrorServerCertificateUntrusted, triggering the didFail callbacks above;
+  /// ShellCore then presents a native retry screen with a visible explanation.
   func webView(
     _ webView: WKWebView,
     didReceive challenge: URLAuthenticationChallenge,
@@ -89,16 +89,16 @@ final class ShellNavigationDelegate: NSObject, WKNavigationDelegate {
     completionHandler(.performDefaultHandling, nil)
   }
 
-  /// §7.2 内容进程被回收后要恢复，不实现就永久白屏。
+  /// §7.2 Recover after WebContent process termination instead of leaving a permanent blank page.
   func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
     ShellCore.shared.onRenderProcessGone(crashed: true)
   }
 
-  // ----------------------------------------------------------------- 杂项
+  // ----------------------------------------------------------------- Utilities
 
   private func report(_ error: Error, url: URL?) {
     let nsError = error as NSError
-    // 用户自己点走、或者我们在 decidePolicy 里 cancel 掉的导航不是失败。
+    // User-cancelled navigation, or navigation cancelled in decidePolicy, is not a loading failure.
     if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
     let failing = (nsError.userInfo[NSURLErrorFailingURLStringErrorKey] as? String)
       ?? url?.absoluteString ?? ""
@@ -115,7 +115,7 @@ final class ShellNavigationDelegate: NSObject, WKNavigationDelegate {
 
   private func isInternal(_ url: URL) -> Bool {
     guard let host = url.host?.lowercased() else { return false }
-    // 配置缺失时一律放行，别把自己挡在外面。
+    // When configuration is unavailable, allow navigation to avoid blocking the application itself.
     guard let entry = entryHost else { return true }
     return host == entry || host.hasSuffix(".\(entry)")
   }
@@ -123,7 +123,7 @@ final class ShellNavigationDelegate: NSObject, WKNavigationDelegate {
   static func openExternal(_ url: URL) {
     DispatchQueue.main.async {
       UIApplication.shared.open(url, options: [:]) { ok in
-        if !ok { NSLog("[SsgShell] 系统打不开 \(url.absoluteString)") }
+        if !ok { NSLog("[SsgShell] The system cannot open \(url.absoluteString)") }
       }
     }
   }

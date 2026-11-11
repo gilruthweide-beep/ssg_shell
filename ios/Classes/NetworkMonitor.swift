@@ -1,14 +1,14 @@
 import Foundation
 import Network
 
-/// §10.4 网络恢复单独通知。
+/// §10.4 Notify network recovery separately.
 ///
-/// 回前台瞬间网络往往还没真正可用（Wi-Fi 重连、蜂窝重新附着要几秒），此时 Web 发起的
-/// 重连会失败。规范的判据是「能发出请求」。
+/// Network connectivity may lag foreground entry by several seconds during Wi-Fi reconnection or cellular attachment,
+/// causing an early Web reconnect to fail. The specification requires the connection to be usable for requests.
 ///
-/// iOS 没有 Android 的 `NET_CAPABILITY_VALIDATED`，拿不到「这条路真的通了」这个信号，
-/// 所以这里用 `NWPathMonitor` 的 `.satisfied` 再叠一层去抖（§10.4.3 要求 1~2 秒）作为
-/// 近似：路由就绪后再等 1.5 秒才通知 Web，避免把「刚连上还没拿到 IP」的那一下转发过去。
+/// iOS has no direct equivalent of Android's `NET_CAPABILITY_VALIDATED` signal,
+/// so approximate availability by debouncing `NWPathMonitor.satisfied` for the §10.4.3 interval of 1–2 seconds.
+/// Wait 1.5 seconds after route availability to avoid reporting a connection before it has an IP address.
 final class NetworkMonitor {
 
   private let monitor = NWPathMonitor()
@@ -17,7 +17,7 @@ final class NetworkMonitor {
   private let onAvailable: (NetworkType) -> Void
 
   private var pending: DispatchWorkItem?
-  /// 已经通知过 Web 的类型。断网时清空，下次恢复重新通知。
+  /// The type the Web has already been notified about. Cleared when offline; notified again on the next restore.
   private var lastNotifiedType: NetworkType?
   private var started = false
 
@@ -48,7 +48,7 @@ final class NetworkMonitor {
   private func handle(_ path: NWPath) {
     let type = Self.type(of: path)
     guard path.status == .satisfied else {
-      // §10.4.4 断网时不用调，`onNetwork('none')` 会被 Web 忽略。
+      // §10.4.4 Do not report disconnection; the Web application ignores `onNetwork('none')`.
       currentType = .none
       DispatchQueue.main.async { [weak self] in
         self?.lastNotifiedType = nil
@@ -68,9 +68,9 @@ final class NetworkMonitor {
       self.pending?.cancel()
       let work = DispatchWorkItem { [weak self] in
         guard let self else { return }
-        // 只在「恢复」和「切换」两个边沿上通知：断网时 lastNotifiedType 会被清空，
-        // Wi-Fi ↔ 蜂窝切换时类型不同。同一条网络上的路径更新（地址变化之类）不转发 ——
-        // Web 每收到一次 onNetwork 都会立刻检查连接并拉取最新消息（§10.4）。
+        // Notify only on the "restored" and "switched" edges: lastNotifiedType is cleared when offline,
+        // and a Wi-Fi ↔ cellular switch changes the type. Path updates on the same network (address changes and the like) are not forwarded:
+        // the Web immediately checks its connection and fetches the latest messages on every onNetwork (§10.4).
         guard self.lastNotifiedType != type else { return }
         self.lastNotifiedType = type
         self.onAvailable(type)
@@ -84,7 +84,7 @@ final class NetworkMonitor {
     if path.usesInterfaceType(.wifi) { return .wifi }
     if path.usesInterfaceType(.cellular) { return .cellular }
     if path.usesInterfaceType(.wiredEthernet) { return .ethernet }
-    // §4 其他取值归为 other。
+    // §4 Map other connection types to other.
     return .other
   }
 }

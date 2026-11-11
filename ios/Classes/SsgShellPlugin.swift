@@ -1,16 +1,16 @@
 import Flutter
 import UIKit
 
-/// Pigeon 契约的 iOS 实现入口。
+/// iOS implementation of the Pigeon contract.
 ///
-/// 这里只做转发：真正的状态全在 `ShellCore`（进程级单例）。原因见 §9.6 ——
-/// 已开启 B 面时冷启动要直接加载 Web，那一刻引擎还没起来，而 §11.1 的心跳、
-/// §11.2 的存活监测必须已经在跑。插件被 detach（引擎销毁）也不能停掉这些。
+/// This layer forwards calls; the process-level ShellCore owns state. Under §9.6,
+/// B-side cold starts load the Web application before the engine starts, while the §11.1 heartbeat
+/// and §11.2 liveness monitor must already be active. Plugin detachment must not stop them.
 public class SsgShellPlugin: NSObject, FlutterPlugin, SsgShellHostApi {
 
   private let flutterApi: SsgShellFlutterApi
 
-  /// Dart 上线前错过的状态类事件只在它第一次 `initialize()` 时补发，之后都是实时的。
+  /// Stateful events missed before Dart came online are replayed only on its first `initialize()`; after that everything is real-time.
   private var stickyReplayed = false
 
   private init(flutterApi: SsgShellFlutterApi) {
@@ -24,12 +24,12 @@ public class SsgShellPlugin: NSObject, FlutterPlugin, SsgShellHostApi {
     SsgShellHostApiSetup.setUp(binaryMessenger: registrar.messenger(), api: instance)
     ShellCore.shared.attach()
     ShellCore.shared.setDartApi(flutterApi)
-    // 注册表只弱引用插件实例，publish 一下才活得过这个方法。
+    // The registrar holds only a weak reference to the plugin instance; publishing it keeps it alive past this method.
     registrar.publish(instance)
 
-    // §8.4 体验与性能 1 / §9.6：这一步在 AppDelegate 注册插件时就跑，早于首帧 ——
-    // WebView 内核首次初始化要几百毫秒，提前做能直接缩短冷启动。
-    // 两个开关都默认关：没在 Info.plist 里显式打开时，时机完全交给 Dart。
+    // §8.4 Performance 1 / §9.6: initialize during AppDelegate plugin registration before the first frame;
+    // starting the WebView engine early saves hundreds of milliseconds on a cold start.
+    // Both switches default to false; without explicit Info.plist values, Dart controls timing.
     if ShellConfig.autoPreload {
       ShellCore.shared.preload()
     }
@@ -40,7 +40,7 @@ public class SsgShellPlugin: NSObject, FlutterPlugin, SsgShellHostApi {
 
   public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
     SsgShellHostApiSetup.setUp(binaryMessenger: registrar.messenger(), api: nil)
-    // 引擎没了就不要再往 Dart 发事件，但壳本身继续跑。
+    // Stop Dart events after engine destruction while the shell continues running.
     ShellCore.shared.setDartApi(nil)
   }
 
@@ -48,7 +48,7 @@ public class SsgShellPlugin: NSObject, FlutterPlugin, SsgShellHostApi {
 
   func initialize(config: ShellConfigDto) throws -> ShellInfo {
     let info = ShellCore.shared.initialize(config)
-    // 调到这里说明 Dart 已经挂好了接收端。补发要赶在返回值之前发出去。
+    // Reaching here means Dart has attached its receiver. The replay must go out before the return value.
     if !stickyReplayed {
       stickyReplayed = true
       ShellCore.shared.replaySticky(to: flutterApi)
@@ -124,7 +124,7 @@ public class SsgShellPlugin: NSObject, FlutterPlugin, SsgShellHostApi {
     PermissionCoordinator.notificationState
   }
 
-  /// §6.2 只在收到 `eventLogin` 之后调。启动期调用会被拒掉并返回当前状态。
+  /// §6.2 Call only after eventLogin; reject startup requests and return the current state.
   func requestNotificationPermission(
     completion: @escaping (Result<NotificationPermission, Error>) -> Void
   ) {
@@ -138,7 +138,7 @@ public class SsgShellPlugin: NSObject, FlutterPlugin, SsgShellHostApi {
     PermissionCoordinator.openAppSettings()
   }
 
-  /// §10.3 电池优化白名单是 Android 的概念（Doze）。iOS 空操作返回 true。
+  /// §10.3 Battery optimization exemption is an Android Doze concept; return true without action on iOS.
   func requestBatteryOptimizationExemption(completion: @escaping (Result<Bool, Error>) -> Void) {
     completion(.success(true))
   }

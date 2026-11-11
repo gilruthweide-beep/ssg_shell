@@ -6,13 +6,13 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
 
-/** §5.4 前台抑制与角标。规范点名的几个坑全在这里钉住。 */
+/** §5.4 Foreground suppression and badge regression coverage for specification edge cases. */
 class NotificationGateTest {
 
     private val gate = NotificationGate()
 
     @Test
-    fun `前台且停在该会话时抑制`() {
+    fun `suppresses the active conversation in the foreground`() {
         gate.onChatOpen("1571275627")
 
         assertTrue(
@@ -25,7 +25,7 @@ class NotificationGateTest {
     }
 
     @Test
-    fun `后台一律不抑制 —— 切后台不会发 chatClose，tracked 还留着`() {
+    fun `never suppresses in the background even while the chat remains tracked`() {
         gate.onChatOpen("1571275627")
 
         assertFalse(
@@ -38,7 +38,7 @@ class NotificationGateTest {
     }
 
     @Test
-    fun `停在会话列表或其他会话时照常展示`() {
+    fun `displays notifications from the list or another conversation`() {
         gate.onChatOpen("1571275627")
 
         assertFalse(gate.shouldSuppress("-100123", appInForeground = true, enabled = true))
@@ -48,9 +48,9 @@ class NotificationGateTest {
     }
 
     @Test
-    fun `切到其他会话时，旧会话的 chatClose 不会误清掉新会话`() {
+    fun `closing the previous conversation preserves the newly opened one`() {
         gate.onChatOpen("A")
-        // Web 先发新会话的 chatOpen，再发旧会话的 chatClose（顺序不保证）。
+        // The Web application may open a new chat before closing the previous one; event order is not guaranteed.
         gate.onChatOpen("B")
         gate.onChatClose("A")
 
@@ -59,7 +59,7 @@ class NotificationGateTest {
     }
 
     @Test
-    fun `页面重新加载要清掉 tracked —— reload 不会发 chatClose`() {
+    fun `page loading clears tracked state without requiring chatClose`() {
         gate.onChatOpen("1571275627")
         gate.onPageLoadStarted()
 
@@ -68,7 +68,7 @@ class NotificationGateTest {
     }
 
     @Test
-    fun `推送里没有 chat_id 时不抑制`() {
+    fun `does not suppress pushes without chat_id`() {
         gate.onChatOpen("1571275627")
 
         assertFalse(gate.shouldSuppress(null, appInForeground = true, enabled = true))
@@ -76,14 +76,14 @@ class NotificationGateTest {
     }
 
     @Test
-    fun `开关关掉就完全不抑制`() {
+    fun `disabled suppression always allows display`() {
         gate.onChatOpen("1571275627")
 
         assertFalse(gate.shouldSuppress("1571275627", appInForeground = true, enabled = false))
     }
 
     @Test
-    fun `角标不接受负数，0 表示清零`() {
+    fun `badge rejects negative counts and clears at zero`() {
         gate.onUnreadCount(12)
         assertEquals(12, gate.badgeCount)
 

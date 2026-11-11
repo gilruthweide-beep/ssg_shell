@@ -2,12 +2,12 @@ import Foundation
 import UIKit
 import WebKit
 
-/// §10.5 / §10.6 IM 的 WKWebView 由进程级单例创建和持有，容器只负责挂上和取下。
+/// §10.5 / §10.6 A process-level singleton creates and owns the IM WKWebView; containers only attach and detach it.
 ///
-/// - §10.5 只开一个实例：Web 用 BroadcastChannel 在同源页面之间选举主实例，第二个同域
-///   WebView 可能被选为从实例 —— 界面看着完全正常，但不建长连接。
-/// - §10.6 实例长活：不在切后台、锁屏、切 Tab 时销毁。重建 = 重新加载整个 Web =
-///   重建长连接 + 重拉历史。
+/// - §10.5 Keep one instance: the Web application uses BroadcastChannel to elect a primary same-origin instance.
+///   A second WebView may become secondary, showing a normal interface without opening a persistent connection.
+/// - §10.6 Keep the instance alive across background entry, locking, and tab changes. Recreation reloads the entire Web app,
+///   reconnects its persistent connection, and fetches history again.
 final class ImWebViewHolder {
 
   static let shared = ImWebViewHolder()
@@ -16,7 +16,7 @@ final class ImWebViewHolder {
 
   private(set) var webView: WKWebView?
 
-  /// 当前挂载的容器提供的能力，没挂载时为 nil。
+  /// Capabilities supplied by the attached container, or nil when detached.
   weak var host: ShellWebViewHost? {
     didSet {
       filePicker.host = host
@@ -25,22 +25,22 @@ final class ImWebViewHolder {
     }
   }
 
-  /// §1.3 iOS 的 `WKUserScript(injectionTime: .atDocumentStart)` 没有「不支持」这档，
-  /// 建出来就一定在首个脚本之前执行，所以这里恒为 true。
+  /// §1.3 iOS always supports `WKUserScript(injectionTime: .atDocumentStart)`;
+  /// it executes before the first page script, so this value is always true.
   let documentStartInjected = true
 
   let filePicker = FilePickerBridge()
 
-  // WKWebView 只弱引用这几个 delegate，得由这里持住。
+  // WKWebView holds weak delegate references; retain them here.
   private var router: ScriptMessageRouter?
   private var navigationDelegate: ShellNavigationDelegate?
   private var uiDelegate: ShellUIDelegate?
 
   var isCreated: Bool { webView != nil }
 
-  // ----------------------------------------------------------------- 创建
+  // ----------------------------------------------------------------- Creation
 
-  /// 幂等。已存在就直接返回，不重建（§10.6「不要每次进入重建 WebView」）。
+  /// Idempotent: return the existing instance instead of recreating it on each entry (§10.6).
   @discardableResult
   func get(config: ShellConfig) -> WKWebView {
     if let webView { return webView }
@@ -48,24 +48,26 @@ final class ImWebViewHolder {
     let info = ShellInjection.shellInfo(shellVersion: config.shellVersion)
     let configuration = WKWebViewConfiguration()
 
-    // §8.1 数据存储必须是 default()：用 nonPersistent() 等于每次启动都是新设备。
-    // §8.3 这里也刻意**不**调 removeData(ofTypes:) —— 清存储会让用户被登出、
-    // 本地消息缓存全失、eventRegister 的「每设备一次」标记被抹掉。
+    // §8.1 Use the default() data store; nonPersistent() would make every startup look like a new device.
+    // §8.3 Intentionally avoid removeData(ofTypes:), which logs users out,
+    // removes cached messages, and resets the once-per-device eventRegister marker.
     configuration.websiteDataStore = .default()
-    // §8.2 运行环境。
+    // §8.2 Runtime environment.
     configuration.allowsInlineMediaPlayback = true
     configuration.mediaTypesRequiringUserActionForPlayback = []
-    // §7.1 对齐：window.open 交给 createWebViewWith 处理。
+    // §7.1 Route window.open through createWebViewWith for matching platform behavior.
     configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-    // §2.2 WebKit 会把它**追加**在默认 UA 后面，不是整段替换。
+    // §2.2 WebKit appends this to the default user agent instead of replacing it.
     configuration.applicationNameForUserAgent =
       ShellInjection.applicationNameForUserAgent(shellVersion: config.shellVersion)
-    // §2.2 Web 与服务端按 UA 里的 `iPhone` / `iPad` 判平台。iPad 上 WKWebView 默认按
-    // 桌面站点请求，UA 会变成 `Macintosh`、不带 `iPad`，所以固定成移动版。
+    // §2.2 The Web and server detect the platform by `iPhone` / `iPad` in the UA. On iPad, WKWebView by default requests
+    // the desktop site and the UA becomes `Macintosh` without `iPad`, so pin it to mobile.
     configuration.defaultWebpagePreferences.preferredContentMode = .mobile
 
     let controller = configuration.userContentController
-    // §1.2 必须在页面任何脚本执行之前完成注入：Web 侧有一组常量在模块加载那一刻求值。
+    // Install before the request so the first visible IM frame has CJK glyphs.
+    controller.addUserScript(CjkFontFallback.userScript)
+    // §1.2 Inject before any page script: Web constants are evaluated during module loading.
     controller.addUserScript(
       WKUserScript(
         source: ShellInjection.injectionScript(info),
@@ -73,7 +75,7 @@ final class ImWebViewHolder {
         forMainFrameOnly: true
       )
     )
-    // §7.3 接管 <input type="file">，不能落回 WebKit 的默认菜单。
+    // §7.3 Take over <input type="file"> instead of falling back to WebKit's default menu.
     controller.addUserScript(
       WKUserScript(
         source: ShellInjection.fileInputScript,
@@ -82,7 +84,7 @@ final class ImWebViewHolder {
       )
     )
     if config.forwardConsole {
-      // §11.6 WKWebView 没有 onConsoleMessage，只能包一层 console。
+      // §11.6 WKWebView has no onConsoleMessage callback, so wrap the console methods.
       controller.addUserScript(
         WKUserScript(
           source: ShellInjection.consoleScript,
@@ -94,13 +96,13 @@ final class ImWebViewHolder {
 
     let router = ScriptMessageRouter(filePicker: filePicker)
     self.router = router
-    // §3.2 十个 handler 全部注册，未注册的会抛异常，Web 已捕获但事件会丢。
+    // §3.2 Register all ten handlers; missing handlers throw errors caught by Web code, but lose events.
     for name in ShellInjection.eventHandlers {
       controller.add(router, name: name)
     }
     controller.add(router, name: ShellInjection.consoleHandler)
     controller.add(router, name: ShellInjection.filePickHandler)
-    // §7.3.4 页面逐块拉文件内容，要带回复的那种 handler。
+    // §7.3.4 Use a reply-capable handler so the page can request file contents in chunks.
     controller.addScriptMessageHandler(
       router,
       contentWorld: .page,
@@ -117,19 +119,19 @@ final class ImWebViewHolder {
     web.navigationDelegate = navigation
     web.uiDelegate = ui
 
-    // §9.4 WebView 放进安全区后页面内 env(safe-area-inset-*) 必须为 0，
-    // 所以这里不要再让它自己加 contentInset。
+    // §9.4 With the WebView inside the safe area, env(safe-area-inset-*) must be zero;
+    // prevent WebKit from applying an additional contentInset.
     web.scrollView.contentInsetAdjustmentBehavior = .never
-    // §9.5 避免整页橡皮筋把聊天界面拉出来。
+    // §9.5 Prevent whole-page rubber-banding from pulling the chat interface out of place.
     web.scrollView.bounces = false
     web.scrollView.alwaysBounceVertical = false
     web.scrollView.showsHorizontalScrollIndicator = false
-    // §9.2 键盘由 Web 处理：frame 保持不变，原生不做偏移，也不动 contentInset。
+    // §9.2 The Web application handles the keyboard; keep the native frame and contentInset unchanged.
     web.scrollView.keyboardDismissMode = .none
-    // §9.3 页面已声明 user-scalable=no，这里只要别放大就行。
+    // §9.3 The page declares user-scalable=no; avoid adding native zoom.
     web.allowsBackForwardNavigationGestures = false
     web.allowsLinkPreview = false
-    // 背景色与首屏一致：启动、键盘弹收、容器切换时边缘不会闪出黑色。
+    // Match the first-screen background to avoid dark edge flashes during startup, keyboard transitions, and container changes.
     let background = UIColor(argb: config.backgroundColorArgb)
     web.backgroundColor = background
     web.scrollView.backgroundColor = background
@@ -143,18 +145,18 @@ final class ImWebViewHolder {
     webView = web
 
     if let url = config.resolvedUrl() {
-      // §9.6 WebView 在启动后立即开始加载入口地址，不等其他初始化做完。
+      // §9.6 Load the landing URL immediately after startup without waiting for other initialization.
       web.load(URLRequest(url: url))
     } else {
-      NSLog("[SsgShell] entryUrl 为空或不合法，WebView 已创建但没有加载任何地址")
+      NSLog("[SsgShell] entryUrl is empty or invalid; WebView was created without loading a URL")
     }
     return web
   }
 
   // --------------------------------------------------------------- Native → Web
 
-  /// §4 `window.__ssgShell` 由 Web 在启动流程中创建，页面加载早期不存在，
-  /// 每次重新加载会重建 —— 调用前必须判空，不存在时跳过，不要重试轰炸。
+  /// §4 The Web application creates `window.__ssgShell` during startup and recreates it on each page load.
+  /// Check it before calling; skip missing callbacks instead of repeatedly retrying during early loading.
   func callWeb(_ method: String, arg: String? = nil) {
     guard let webView else { return }
     let call = arg == nil ? "\(method)()" : "\(method)(\(arg!))"
@@ -162,7 +164,7 @@ final class ImWebViewHolder {
     DispatchQueue.main.async {
       webView.evaluateJavaScript(js) { _, error in
         if let error = error as NSError?, error.code != WKError.javaScriptResultTypeIsUnsupported.rawValue {
-          NSLog("[SsgShell] callWeb(\(method)) 失败：\(error.localizedDescription)")
+          NSLog("[SsgShell] callWeb(\(method)) failed:\(error.localizedDescription)")
         }
       }
     }
@@ -180,7 +182,7 @@ final class ImWebViewHolder {
     }
   }
 
-  /// §7.3.4 把清单交回页面，页面随后逐块来拉。
+  /// §7.3.4 Return the manifest to the page, which then requests file chunks.
   private func deliverFiles(requestId: String, files: [[String: Any]]) {
     guard let webView else { return }
     let payload: String
@@ -194,19 +196,19 @@ final class ImWebViewHolder {
     DispatchQueue.main.async {
       webView.evaluateJavaScript(js) { _, error in
         if let error {
-          NSLog("[SsgShell] 交回文件清单失败：\(error.localizedDescription)")
+          NSLog("[SsgShell] Unable to deliver file manifest:\(error.localizedDescription)")
         }
       }
     }
   }
 
-  // ----------------------------------------------------------------- 生命周期
+  // ----------------------------------------------------------------- Lifecycle
 
-  /// §10.2 iOS 这边不需要手动翻可见性：WKWebView 的 `document.hidden` 跟着
-  /// 视图层级和 App 状态自己翻，`visibilitychange` 是免费的第二条通道。
-  /// Android 那边必须显式调 `onPause()` / `onResume()` 才会翻。
+  /// §10.2 iOS updates WKWebView document.hidden automatically from view hierarchy
+  /// and application state; visibilitychange provides a second foreground signal.
+  /// Android requires explicit onPause() / onResume() calls to update visibility.
   ///
-  /// §10.3 也不要去冻结定时器 —— iOS 没有 `pauseTimers()` 这种 API，这正好。
+  /// §10.3 Keep timers running; iOS has no pauseTimers() API.
   func onResumeWeb() {}
 
   func onPauseWeb() {}
@@ -219,7 +221,7 @@ final class ImWebViewHolder {
 
   var currentUrl: String { webView?.url?.absoluteString ?? "" }
 
-  /// UA 要从实例上问，因为它由 WebKit 拼好（默认 UA + applicationNameForUserAgent）。
+  /// Read the final user agent from the instance; WebKit combines the default with applicationNameForUserAgent.
   private(set) var cachedUserAgent: String = ""
 
   func refreshUserAgent() {
@@ -229,8 +231,8 @@ final class ImWebViewHolder {
     }
   }
 
-  /// §11.2.3 iOS 每个 WKWebView 的 WebContent 进程随实例销毁，直接重建即可
-  /// （Android 必须先结束共用的渲染进程）。
+  /// §11.2.3 Each iOS WKWebView releases its own WebContent process when destroyed; direct recreation is enough
+  /// (Android must terminate the shared renderer first).
   @discardableResult
   func recreate(config: ShellConfig) -> WKWebView {
     destroy()
@@ -239,10 +241,10 @@ final class ImWebViewHolder {
     return fresh
   }
 
-  /// 只在重建路径上调。
+  /// Call only during recreation.
   ///
-  /// §8.3：这里刻意**不**调 `WKWebsiteDataStore.removeData(ofTypes:)`，也不往页面注入
-  /// JS 清 `caches` 或注销 Service Worker。「启动时清一次缓存保证干净」是禁止的做法。
+  /// §8.3 Intentionally avoid `WKWebsiteDataStore.removeData(ofTypes:)` and injected JavaScript
+  /// that clears caches or unregisters Service Workers. Clearing caches at startup is prohibited.
   private func destroy() {
     guard let web = webView else { return }
     webView = nil
@@ -266,8 +268,8 @@ final class ImWebViewHolder {
     uiDelegate = nil
   }
 
-  /// JSON 字面量要塞进 `evaluateJavaScript` 的源码里，而 U+2028 / U+2029 在 JSON 里
-  /// 合法、在 JS 源码里是换行 —— 不转义的话一个带这种字符的文件名就能让整段脚本语法错误。
+  /// JSON literals embedded in evaluateJavaScript source must escape U+2028 / U+2029:
+  /// they are legal JSON characters but JavaScript line separators, so an unescaped filename could break the script.
   static func jsSafe(_ json: String) -> String {
     json
       .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
@@ -279,9 +281,9 @@ final class ImWebViewHolder {
     case .none, is NSNull: return ""
     case let text as String: return text
     case let number as NSNumber:
-      // JS 的 true / false 过线后是布尔型的 NSNumber，stringValue 会给出 "1" / "0"。
-      // Android 的 evaluateJavascript 给的是 "true" / "false"，两端要一致 ——
-      // §1.3 的注入自检就是拿这个串和 "false" 比，不处理的话 iOS 上永远报未生效。
+      // JS true / false come across the bridge as boolean NSNumbers, whose stringValue gives "1" / "0".
+      // Android's evaluateJavascript gives "true" / "false"; both platforms must match:
+      // the §1.3 injection check compares this string with "false", so without this iOS would always report it as not applied.
       if CFGetTypeID(number) == CFBooleanGetTypeID() {
         return number.boolValue ? "true" : "false"
       }
@@ -301,7 +303,7 @@ final class ImWebViewHolder {
 }
 
 extension UIColor {
-  /// 配置里的颜色是 ARGB（和 Android 一边一致），`UIColor` 要拆开。
+  /// Configuration uses Android-compatible ARGB colors; split components for UIColor.
   convenience init(argb: UInt32) {
     let alpha = CGFloat((argb >> 24) & 0xFF) / 255
     let red = CGFloat((argb >> 16) & 0xFF) / 255

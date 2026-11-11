@@ -2,10 +2,10 @@ import Foundation
 import UIKit
 import WebKit
 
-/// 壳的大脑。进程级单例，不依赖 Flutter 引擎是否活着。
+/// Process-level shell coordinator, independent of the Flutter engine lifetime.
 ///
-/// 之所以不把这些挂在插件上：按 §9.6，已开启 B 面时冷启动要直接加载 Web，那一刻引擎
-/// 还没起来；而 §11.2 的存活监测、§11.1 的心跳、§10.4 的网络通知必须在那一刻就已经在跑。
+/// This state does not live on the plugin because §9.6 requires B-side cold starts to load the Web application before Flutter starts,
+/// while §11.2 liveness monitoring, §11.1 heartbeat, and §10.4 network notifications must already be active.
 final class ShellCore {
 
   static let shared = ShellCore()
@@ -14,7 +14,7 @@ final class ShellCore {
 
   private var config = ShellConfig()
 
-  /// Dart 侧的回调通道。引擎没起来或已销毁时为 nil，所有 emit 自动跳过。
+  /// Dart callback channel; nil before engine startup or after destruction, causing emits to be skipped.
   private var dart: SsgShellFlutterApi?
 
   private let console = ConsoleLogBuffer()
@@ -32,45 +32,45 @@ final class ShellCore {
 
   private(set) var appInForeground = false
 
-  /// IM 容器是否挂着 WebView 并可见。
+  /// Whether the IM container is attached to the WebView and visible.
   private(set) var imRunning = false
 
-  /// 上一次计算出的「WebView 可见」状态，用于只在翻转时通知 Web。
+  /// Last calculated WebView visibility, used to notify the Web application only on changes.
   private var webVisible = false
 
   private var webReady = false
 
-  /// 带状态含义的几条 Web 事件各留最近一条。Dart 上线之前发生的事件它收不到，
-  /// 而 `login` 同一 uid 只发一次（§3.1）—— 丢了就不会再绑 OneSignal（§5.2）。
-  /// Dart 调 `initialize()` 时由 `replaySticky(to:)` 补发。
+  /// Keep the latest of each stateful Web event. Dart cannot receive events that happened before it came online,
+  /// and `login` is sent only once per uid (§3.1); if lost, OneSignal is never bound (§5.2).
+  /// `replaySticky(to:)` replays them when Dart calls `initialize()`.
   private var stickyWebReady: WebEvent?
-  private var stickyLogin: WebEvent?
+  private var stickyIdentity: WebEvent?
   private var stickyUnread: WebEvent?
   private var stickyChatOpen: WebEvent?
 
-  /// 首屏加载失败时没有容器挂着（预加载阶段），重试页没处可盖。
-  /// 记下来，容器挂上时补（`onHostAttached`）。
+  /// When the initial page fails to load with no container attached (preload phase), there is nowhere to show the retry page.
+  /// Record it and apply it when a container attaches (`onHostAttached`).
   private var loadFailed = false
   private var loadFailedMessage: String?
 
   private var reportedChannelCode = ""
   private var lastWebReadyAtMs: Int64?
 
-  /// §5.3 冷启动点通知时 Web 还没初始化完，参数要暂存，收到 webReady 再调。
+  /// §5.3 Queue cold-start notification parameters until the Web application emits webReady.
   private var pendingOpenChat: OpenChatRequest?
 
   private var injectionOk = false
 
-  /// §6.2 收到 `eventLogin` 之后才允许申请通知权限。
+  /// §6.2 Allow notification permission requests only after `eventLogin`.
   private var loginSeen = false
 
   private var started = false
 
   private weak var container: ImViewController?
 
-  // -------------------------------------------------------------- 装配
+  // -------------------------------------------------------------- Initialization
 
-  /// 由 `SsgShellPlugin.register(with:)` 调（AppDelegate 注册插件那一刻，早于首帧），幂等。
+  /// Called idempotently by `SsgShellPlugin.register(with:)` during AppDelegate plugin registration, before the first frame.
   func attach() {
     guard !started else { return }
     started = true
@@ -78,8 +78,8 @@ final class ShellCore {
     console.capacity = config.consoleBufferSize
 
     let center = NotificationCenter.default
-    // §4 / §10.2 前后台。didBecomeActive 覆盖了锁屏解锁、从后台任务切回、
-    // 从通知点进来这几种情况。
+    // §4 / §10.2 didBecomeActive covers unlocks, returning from background work,
+    // and opening the application from a notification.
     center.addObserver(
       self,
       selector: #selector(onDidBecomeActive),
@@ -92,8 +92,8 @@ final class ShellCore {
       name: UIApplication.didEnterBackgroundNotification,
       object: nil
     )
-    // §11.4 只在 didReceiveMemoryWarning 时调；切后台、回前台都不应触发。
-    // iOS 用 Flutter 时同样直接监听系统通知，不经 Flutter 的 didHaveMemoryPressure 转发。
+    // §11.4 Invoke only for didReceiveMemoryWarning, never merely on background or foreground transitions.
+    // Listen directly to iOS system notifications, even with Flutter, instead of forwarding didHaveMemoryPressure.
     center.addObserver(
       self,
       selector: #selector(onMemoryWarning),
@@ -109,7 +109,7 @@ final class ShellCore {
 
     PermissionCoordinator.refreshNotificationState()
 
-    // 进程起来时 App 通常已经是 active 了，补一次，别等到下一次切回来。
+    // The application is often already active at process startup; deliver the initial state instead of waiting for another transition.
     if UIApplication.shared.applicationState == .active {
       setAppForeground(true)
     }
@@ -121,10 +121,10 @@ final class ShellCore {
 
   func currentConfig() -> ShellConfig { config }
 
-  /// Dart 调 `initialize()` 时补发它上线之前错过的状态类事件。必须在主线程、
-  /// 在 `initialize` 返回之前调 —— Dart 那边靠「先到事件、后到返回值」这个顺序接住它们。
+  /// When Dart calls `initialize()`, replay the stateful events it missed before coming online. Must be called on the main thread
+  /// before `initialize` returns; Dart relies on the "events first, return value second" order to catch them.
   func replaySticky(to api: SsgShellFlutterApi) {
-    for event in [stickyWebReady, stickyLogin, stickyUnread, stickyChatOpen] {
+    for event in [stickyWebReady, stickyIdentity, stickyUnread, stickyChatOpen] {
       guard let event else { continue }
       api.onWebEvent(event: event) { _ in }
     }
@@ -132,15 +132,15 @@ final class ShellCore {
 
   var isWebReady: Bool { webReady }
 
-  /// 容器挂上来时补上它错过的状态。
+  /// When a container attaches, apply the state it missed.
   ///
-  /// `eventWebReady` 每次页面加载只发一次，预加载期间发过就不会再来 —— splash 的那一半
-  /// 由容器自己读 `isWebReady` 决定；这里补首屏加载失败的重试页（§9.6）。
+  /// `eventWebReady` fires only once per page load and will not come again if sent during preload; the splash half
+  /// is decided by the container reading `isWebReady` itself; this handles the retry page for an initial page load failure (§9.6).
   func onHostAttached(_ host: ShellWebViewHost) {
     if loadFailed { host.showErrorPage(loadFailedMessage) }
   }
 
-  /// 页面要重新加载了（reload、重建）：上一个页面留下的状态全部作废。
+  /// The page is about to reload (reload, recreation): all state left by the previous page is discarded.
   private func onPageReset() {
     webReady = false
     stickyWebReady = nil
@@ -156,19 +156,19 @@ final class ShellCore {
     if next.entryUrl != config.entryUrl { reportedChannelCode = "" }
     config = next
     console.capacity = next.consoleBufferSize
-    // §9.6 落盘，下次冷启动直接按缓存走，不等 Dart。
+    // §9.6 Persist configuration so the next cold start uses the cache without waiting for Dart.
     next.persist()
     return ShellInjection.shellInfo(shellVersion: next.shellVersion)
   }
 
-  /// §8.4 体验与性能 1 的 iOS 对应项：B 面开启时提前创建 WebView 并开始加载。
+  /// §8.4 Performance 1 on iOS: create the WebView and begin loading early when B side is enabled.
   func preload() {
     guard config.bSideEnabled else {
-      NSLog("[SsgShell] B 面未开启，跳过 IM 预加载")
+      NSLog("[SsgShell] B side is disabled; skipping IM preload")
       return
     }
     guard !config.entryUrl.isEmpty else {
-      NSLog("[SsgShell] entryUrl 为空，预加载跳过")
+      NSLog("[SsgShell] entryUrl is empty; skipping preload")
       return
     }
     DispatchQueue.main.async { [weak self] in
@@ -180,10 +180,10 @@ final class ShellCore {
   func openIm() {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
-      // 已经在前台时是空操作。
+      // A no-op when the container is already in the foreground.
       if let container = self.container, container.view.window != nil { return }
       guard let top = Self.topViewController() else {
-        NSLog("[SsgShell] 找不到可以 present 的 VC，IM 容器打不开")
+        NSLog("[SsgShell] No view controller is available to present the IM container")
         return
       }
       let controller = ImViewController(config: self.config)
@@ -192,7 +192,7 @@ final class ShellCore {
     }
   }
 
-  /// 按 §10.6 只收起容器，**不会**销毁 WebView 实例。
+  /// §10.6 Close only the container without destroying the WebView instance.
   func closeIm() {
     DispatchQueue.main.async { [weak self] in
       self?.container?.dismiss(animated: false)
@@ -206,10 +206,10 @@ final class ShellCore {
 
   func isBSideEnabled() -> Bool { config.bSideEnabled }
 
-  /// §5.3 打开会话。
+  /// §5.3 Open a conversation.
   ///
-  /// 等 `eventWebReady` 再调：冷启动点通知时 Web 还没初始化完，需把参数暂存，收到后再调。
-  /// 只调一次 —— Web 内部会等会话数据就绪（最长 20 秒）再跳转，不需要原生重试。
+  /// Wait for `eventWebReady`: queue notification parameters while the Web application initializes on a cold start.
+  /// Deliver once. The Web application waits up to 20 seconds for conversation data; native retries are unnecessary.
   func openChat(_ request: OpenChatRequest) {
     guard !request.chatId.isEmpty else { return }
     DispatchQueue.main.async { [weak self] in
@@ -218,7 +218,7 @@ final class ShellCore {
         self.pendingOpenChat = request
         self.emit(
           .deepLinkQueued,
-          "Web 未就绪，已暂存 chatId=\(request.chatId)",
+          "Web is not ready; queued chatId=\(request.chatId)",
           ["chatId": request.chatId]
         )
         return
@@ -229,7 +229,7 @@ final class ShellCore {
 
   private func deliverOpenChat(_ request: OpenChatRequest) {
     var payload: [String: Any] = ["chatId": request.chatId]
-    // §5.3 messageId 传数字或可被 Number() 解析的字符串，可省略。
+    // §5.3 Optional messageId accepts a number or a string parseable by Number().
     if let raw = request.messageId, !raw.isEmpty {
       let trimmed = raw.trimmingCharacters(in: .whitespaces)
       if let number = Int64(trimmed) {
@@ -249,10 +249,10 @@ final class ShellCore {
 
     var extra = ["chatId": request.chatId]
     if let messageId = request.messageId { extra["messageId"] = messageId }
-    emit(.deepLinkDelivered, "已交给 Web：chatId=\(request.chatId)", extra)
+    emit(.deepLinkDelivered, "Delivered to Web: chatId=\(request.chatId)", extra)
   }
 
-  /// §5.4 前台抑制 + §11.3 推送捅醒。
+  /// §5.4 Foreground suppression and §11.3 push-triggered Web connection wakeup.
   func handlePushReceived(_ message: PushMessage) -> PushDecision {
     let suppress = gate.shouldSuppress(
       chatId: message.chatId,
@@ -260,22 +260,22 @@ final class ShellCore {
       enabled: config.suppressForegroundNotifications
     )
 
-    // §11.3 一条消息的推送到达而 App 正在前台，说明这条消息 Web 没有通过长连接收到，
-    // 连接已死。除了按 §5.4 抑制通知，额外调一次 onNetwork 把 Web 捅醒。
+    // §11.3 A foreground push indicates that the Web application missed a message over its persistent connection.
+    // Alongside §5.4 notification suppression, call onNetwork once to wake that connection.
     var nudged = false
     if appInForeground {
-      // 推送都到了，网络一定是通的；监听器还没把状态翻过来时按 other 算。
+      // Receiving the push confirms connectivity; use other until the network monitor catches up.
       let observed = network?.currentType ?? NetworkType.none
       let type: NetworkType = observed == .none ? .other : observed
       DispatchQueue.main.async { [weak self] in self?.deliverNetwork(type) }
       nudged = true
     }
 
-    var reason = appInForeground ? "前台" : "后台"
-    reason += "；tracked=\(gate.trackedChatId ?? "-")"
-    reason += "；incoming=\(message.chatId ?? "-")"
-    if suppress { reason += "；命中前台抑制" }
-    if nudged { reason += "；已调 onNetwork 捅醒" }
+    var reason = appInForeground ? "Foreground" : "Background"
+    reason += "; tracked=\(gate.trackedChatId ?? "-")"
+    reason += "; incoming=\(message.chatId ?? "-")"
+    if suppress { reason += "; foreground notification suppressed" }
+    if nudged { reason += "; Web connection nudged through onNetwork" }
     NSLog("[SsgShell] handlePushReceived: \(reason)")
 
     return PushDecision(
@@ -286,11 +286,11 @@ final class ShellCore {
     )
   }
 
-  /// §5.3 通知点击。
+  /// §5.3 Notification click handling.
   func handlePushOpened(_ message: PushMessage) {
     if config.bSideEnabled { openIm() }
     guard let chatId = message.chatId, !chatId.isEmpty else {
-      NSLog("[SsgShell] 通知点击里没有 chat_id，只打开 App")
+      NSLog("[SsgShell] Notification click has no chat_id; opening the application only")
       return
     }
     openChat(OpenChatRequest(chatId: chatId, messageId: message.messageId))
@@ -301,11 +301,11 @@ final class ShellCore {
   }
 
   func reloadWeb() {
-    NSLog("[SsgShell] 手动 reload（§11.2）")
+    NSLog("[SsgShell] Manual reload (§11.2)")
     ImWebViewHolder.shared.reload()
   }
 
-  /// §11.2.3 iOS 每个 WKWebView 的 WebContent 进程随实例销毁，直接重建即可。
+  /// §11.2.3 Each iOS WKWebView releases its WebContent process with the instance, so recreation is sufficient.
   func recreateWebView() {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
@@ -313,7 +313,7 @@ final class ShellCore {
       self.gate.onPageLoadStarted()
       ImWebViewHolder.shared.recreate(config: self.config)
       self.watchdog.onWebViewRecreated()
-      self.emit(.webViewRecreated, "WebView 实例已重建", [:])
+      self.emit(.webViewRecreated, "WebView instance recreated", [:])
     }
   }
 
@@ -323,7 +323,7 @@ final class ShellCore {
   }
 
   func verifyInjection(_ completion: @escaping (Bool) -> Void) {
-    // §1.3 这是 Web 侧的判定结果。只要它是 true，无论 __SSG_SHELL__ 打印出什么都算失败。
+    // §1.3 Use the Web application's own verdict. A true result fails regardless of the contents of __SSG_SHELL__.
     let js = "document.documentElement.classList.contains('is-web-browser')"
     ImWebViewHolder.shared.evaluate(js) { [weak self] raw in
       let value = raw?.trimmingCharacters(in: CharacterSet(charactersIn: " \"")) ?? ""
@@ -331,7 +331,7 @@ final class ShellCore {
       self?.injectionOk = ok
       self?.emit(
         .injectionChecked,
-        ok ? "注入生效" : "注入未生效（is-web-browser=\(value.isEmpty ? "null" : value)），见 §1.2",
+        ok ? "Injection active" : "Injection failed (is-web-browser=\(value.isEmpty ? "null" : value)); see §1.2",
         ["isWebBrowser": value.isEmpty ? "null" : value]
       )
       completion(ok)
@@ -339,15 +339,15 @@ final class ShellCore {
   }
 
   func evaluateJavaScript(_ script: String, completion: @escaping (Result<String, Error>) -> Void) {
-    // §8.3 存储不要清。清存储的后果：用户被登出、本地消息缓存全失、媒体重新下载一遍、
-    // 诊断上下文丢失，并且 eventRegister 的「每设备一次」标记被抹掉，渠道注册数虚高。
+    // §8.3 Preserve storage. Clearing it logs users out, removes cached messages, downloads media again,
+    // loses diagnostic context, and resets the once-per-device eventRegister marker, inflating attribution counts.
     if let hit = Self.forbiddenJs.first(where: { script.range(of: $0, options: .caseInsensitive) != nil }) {
       completion(.failure(NSError(
         domain: "ssg_shell",
         code: 400,
         userInfo: [
           NSLocalizedDescriptionKey:
-            "脚本包含禁止的存储清理调用「\(hit)」，见 §8.3。只能由用户显式「清除数据」触发。",
+            "Script contains prohibited storage deletion call \(hit); see §8.3. Deletion requires an explicit user action to clear data.",
         ]
       )))
       return
@@ -357,13 +357,13 @@ final class ShellCore {
     }
   }
 
-  // ------------------------------------------------------------ 诊断
+  // ------------------------------------------------------------ Diagnostics
 
-  /// §8.1 / §11.7 内核信息。
+  /// §8.1 / §11.7 WebView engine information.
   ///
-  /// §11.7 的「引导用户更新内核」是 Android 专属的：那边 WebView 是可独立更新的系统
-  /// 组件，老设备上会停在很旧的版本。iOS 的 WebKit 随系统升级，壳的最低版本（iOS 14）
-  /// 已经远超 §8.1 要的能力集，所以这里只报版本，不判不合格。
+  /// §11.7 Engine-update guidance applies only to Android, where WebView is independently updatable
+  /// and may be outdated on older devices. iOS updates WebKit with the OS, and the shell's iOS 14 minimum
+  /// already provides the required §8.1 capabilities, so report its version without rejecting it.
   func kernelInfo() -> KernelInfo {
     let versionName = ShellInjection.webKitVersion()
     let major = Int64(versionName.split(separator: ".").first.map(String.init) ?? "") ?? -1
@@ -371,7 +371,7 @@ final class ShellCore {
       verdict: versionName.isEmpty ? .unknown : .ok,
       versionName: versionName,
       majorVersion: major,
-      // Android 为 WebView 实现包名；iOS 为空串。
+      // WebView implementation package on Android; empty on iOS.
       packageName: ""
     )
   }
@@ -398,8 +398,8 @@ final class ShellCore {
     )
   }
 
-  /// §11.6 导出：当前 URL、UA、内核版本、`__SSG_SHELL__`、最近一次 reload 时间、
-  /// 最近 N 条 console。
+  /// §11.6 Export the current URL, user agent, engine version, `__SSG_SHELL__`, last reload time,
+  /// and most recent N console entries.
   func exportDiagnostics() -> String {
     let d = diagnostics()
     let formatter = DateFormatter()
@@ -410,35 +410,35 @@ final class ShellCore {
       return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
     }
     var out = ""
-    out += "==== SSG Shell 诊断 ====\n"
-    out += "导出时间        \(formatter.string(from: Date()))\n"
-    out += "平台            ios\n"
-    out += "包名            \(d.shellInfo.bundleId)\n"
-    out += "壳版本          \(d.shellInfo.shellVersion)\n"
-    out += "机型            \(d.shellInfo.deviceModel)\n"
-    out += "系统版本        \(d.shellInfo.osVersion)\n"
+    out += "==== SSG Shell diagnostics ====\n"
+    out += "Exported at        \(formatter.string(from: Date()))\n"
+    out += "Platform            ios\n"
+    out += "Bundle ID            \(d.shellInfo.bundleId)\n"
+    out += "Shell version          \(d.shellInfo.shellVersion)\n"
+    out += "Device model            \(d.shellInfo.deviceModel)\n"
+    out += "OS version        \(d.shellInfo.osVersion)\n"
     out += "WebKit          \(d.kernel.versionName) (\(d.kernel.verdict))\n"
-    out += "入口地址        \(d.entryUrl)\n"
-    out += "当前地址        \(d.currentUrl)\n"
+    out += "Landing URL        \(d.entryUrl)\n"
+    out += "Current URL        \(d.currentUrl)\n"
     out += "UA              \(d.userAgent)\n"
-    out += "channelCode     \(d.channelCode.isEmpty ? "(未提供，可选；以 Web 归因事件为准)" : d.channelCode)\n"
-    out += "注入自检        \(d.injectionOk ? "通过 shellSrc:inject" : "未通过，见 §1.2")\n"
-    out += "IM 挂载         \(d.imRunning)\n"
-    out += "App 前台        \(d.appInForeground)\n"
-    out += "最近 webReady   \(time(d.lastWebReadyAtMs))\n"
-    out += "最近 webAlive   \(time(d.lastWebAliveAtMs))\n"
-    out += "最近 reload     \(time(d.lastReloadAtMs))  次数 \(d.reloadCount)\n"
-    out += "WebView 重建    \(d.recreateCount) 次\n"
-    out += "当前会话        \(d.trackedChatId ?? "-")\n"
-    out += "角标            \(d.badgeCount)\n\n"
-    out += "---- 最近 \(d.consoleTail.count) 条 console ----\n"
+    out += "channelCode     \(d.channelCode.isEmpty ? "(optional; not supplied by Web attribution events)" : d.channelCode)\n"
+    out += "Injection check        \(d.injectionOk ? "Passed shellSrc:inject" : "Failed; see §1.2")\n"
+    out += "IM attached         \(d.imRunning)\n"
+    out += "App foreground        \(d.appInForeground)\n"
+    out += "Last webReady   \(time(d.lastWebReadyAtMs))\n"
+    out += "Last webAlive   \(time(d.lastWebAliveAtMs))\n"
+    out += "Last reload     \(time(d.lastReloadAtMs))  Count \(d.reloadCount)\n"
+    out += "WebView recreations    \(d.recreateCount) times\n"
+    out += "Active chat        \(d.trackedChatId ?? "-")\n"
+    out += "Badge            \(d.badgeCount)\n\n"
+    out += "---- Last \(d.consoleTail.count) console entries ----\n"
     out += console.dump()
     return out
   }
 
-  // ------------------------------------------------- WebView 回调入口
+  // ------------------------------------------------- WebView callbacks
 
-  /// §3.1 从 `ScriptMessageRouter` 过来。
+  /// §3.1 Entry point from `ScriptMessageRouter`.
   func onWebEvent(_ event: WebEvent) {
     DispatchQueue.main.async { [weak self] in
       self?.handleWebEvent(event)
@@ -446,7 +446,7 @@ final class ShellCore {
   }
 
   private func handleWebEvent(_ event: WebEvent) {
-    // §2.1 渠道取值由 Web 负责，诊断只记录归因事件，不读取或改写 URL。
+    // §2.1 The Web application owns channel attribution; diagnostics record events without reading or rewriting the URL.
     if event.name == .register || event.name == .login || event.name == .messageSent {
       reportedChannelCode = event.params["channelCode"] ?? ""
     }
@@ -455,14 +455,14 @@ final class ShellCore {
       webReady = true
       stickyWebReady = event
       lastWebReadyAtMs = event.receivedAtMs
-      // §9.6 收到 eventWebReady 后立即撤 splash，不要用固定时长定时器。
+      // §9.6 Remove the splash immediately after eventWebReady rather than waiting a fixed duration.
       ImWebViewHolder.shared.host?.dismissSplash(.splashDismissed)
-      // §5.3 冷启动点通知时暂存的参数，就绪后补发，只调一次。
+      // §5.3 Deliver queued cold-start notification parameters once after readiness.
       if let queued = pendingOpenChat {
         pendingOpenChat = nil
         deliverOpenChat(queued)
       }
-      // §1.3 首屏可见即可自检，不用等人去连调试器。
+      // §1.3 Run the injection check when the first screen is visible without requiring a debugger.
       verifyInjection { _ in }
       ImWebViewHolder.shared.refreshUserAgent()
 
@@ -481,27 +481,29 @@ final class ShellCore {
       stickyUnread = event
       let count = Int(event.unreadCount ?? 0)
       gate.setBadge(count)
-      // §5.4 角标数 = Web 给的未读总数，count 为 0 时清零。
+      // §5.4 Badge count equals the Web unread total; a count of zero clears it.
       if config.manageBadge { BadgeApplier.apply(count) }
 
-    // §6.2 通知权限在收到 eventLogin 之后才允许申请，这里只放开闸门，
-    // 真正弹窗由 Dart 侧决定时机（宿主可能要先做自己的引导页）。
+    // §6.2 Open the notification permission gate only after eventLogin;
+    // Dart controls the actual prompt timing so the host can show its own introduction first.
     case .login:
       loginSeen = true
-      stickyLogin = event
+      stickyIdentity = event
 
     case .logout:
       loginSeen = false
-      stickyLogin = nil
+      // Local patch: keep the logout as the latest identity so a logout before Dart starts
+      // still reaches OneSignal.logout() and stops the previous account's pushes.
+      stickyIdentity = event
       stickyChatOpen = nil
-      // §5.4 退出登录时 Web 会发 unreadCount=0，这里不额外清，交给那条事件。
+      // §5.4 The Web application emits unreadCount=0 on logout; let that event clear the badge.
 
     default:
       break
     }
 
     let api = dart
-    api?.onWebEvent(event: event) { _ in /* Dart 侧没挂监听不是错误 */ }
+    api?.onWebEvent(event: event) { _ in /* Dart listeners are optional. */ }
   }
 
   func hasLoggedIn() -> Bool { loginSeen }
@@ -509,7 +511,7 @@ final class ShellCore {
   func onPageStarted(_ url: String?) {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
-      // §5.4 页面重新加载时不会发 chatClose，原生在页面开始加载时要清空记住的 chatId。
+      // §5.4 Page reloads do not emit chatClose; clear the tracked chatId when loading starts.
       self.gate.onPageLoadStarted()
       self.onPageReset()
       self.watchdog.onPageStarted()
@@ -523,7 +525,7 @@ final class ShellCore {
   }
 
   func onMainFrameLoadFailed(url: String, description: String) {
-    NSLog("[SsgShell] 首屏加载失败 \(url): \(description)")
+    NSLog("[SsgShell] Initial page load failed \(url): \(description)")
     DispatchQueue.main.async { [weak self] in
       self?.loadFailed = true
       self?.loadFailedMessage = nil
@@ -534,26 +536,26 @@ final class ShellCore {
 
   func onSslError(_ code: Int) {
     DispatchQueue.main.async { [weak self] in
-      let message = "安全连接校验失败，请检查网络环境后重试"
+      let message = "Secure connection verification failed. Check your network and try again."
       self?.loadFailed = true
       self?.loadFailedMessage = message
       ImWebViewHolder.shared.host?.showErrorPage(message)
-      self?.emit(.loadFailed, "SSL 校验失败（code=\(code)）", ["sslError": "\(code)"])
+      self?.emit(.loadFailed, "SSL validation failed (code=\(code))", ["sslError": "\(code)"])
     }
   }
 
-  /// §7.2 内容进程被回收：`reload()`。不实现就永久白屏。
+  /// §7.2 Reload after WebContent process termination to avoid a permanent blank page.
   func onRenderProcessGone(crashed: Bool) {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       self.emit(
         .renderProcessGone,
-        crashed ? "WebContent 进程被回收" : "WebContent 进程已结束",
+        crashed ? "WebContent process was reclaimed" : "WebContent process terminated",
         ["didCrash": "\(crashed)"]
       )
       self.onPageReset()
       self.gate.onPageLoadStarted()
-      // §7.2 明确要求这里 reload()。reload 不生效的情况由 §11.2.3 的看门狗接手重建。
+      // §7.2 Requires reload() here; the §11.2.3 watchdog recreates the WebView if reload fails to start.
       if let web = ImWebViewHolder.shared.webView, web.url != nil {
         web.reload()
       } else {
@@ -572,7 +574,7 @@ final class ShellCore {
       line: line
     )
     console.add(record)
-    // §11.6 把 Web 的 console 落到原生日志。
+    // §11.6 Forward Web console output to native logs.
     NSLog("[SsgShellWeb][\(level.wire)] \(message)")
     DispatchQueue.main.async { [weak self] in
       self?.dart?.onShellEvent(
@@ -587,7 +589,7 @@ final class ShellCore {
     }
   }
 
-  // ------------------------------------------------------- 生命周期
+  // ------------------------------------------------------- Lifecycle
 
   @objc private func onDidBecomeActive() {
     setAppForeground(true)
@@ -598,7 +600,7 @@ final class ShellCore {
     setAppForeground(false)
   }
 
-  /// §11.4 内存告警。只在系统真的告警时调 —— 切后台、回前台都不应触发。
+  /// §11.4 Forward actual system memory warnings only, not ordinary background/foreground transitions.
   @objc private func onMemoryWarning() {
     DispatchQueue.main.async { [weak self] in
       ImWebViewHolder.shared.callWeb("onMemoryWarning")
@@ -619,18 +621,18 @@ final class ShellCore {
     updateWebVisibility()
   }
 
-  /// §10.2 回前台信号。
+  /// §10.2 Foreground signaling.
   ///
-  /// 判据是「WebView 真的可见」而不是「App 在前台」：IM 容器和 Flutter 的 A 面互切时
-  /// App 一直在前台，但 WebView 已经不可见、Web 的 `document.hidden` 翻成 true、
-  /// 停发 `eventWebAlive`。这时如果 §11.2 的计时还在跑，60 秒后会误判卡死。
+  /// Use actual WebView visibility instead of application foreground state. Switching between IM and Flutter A side
+  /// keeps the application in the foreground while the WebView becomes hidden, `document.hidden` becomes true,
+  /// and eventWebAlive stops. Keeping §11.2 timing active would falsely detect a timeout after 60 seconds.
   private func updateWebVisibility() {
     let visible = appInForeground && imRunning
     guard visible != webVisible else { return }
     webVisible = visible
     if visible {
-      // §10.2.1 每次回前台都调 onForeground()。锁屏解锁、从后台任务切回、
-      // 从通知点进来都算。注入生效后，后台停留超过 1.5 秒回前台即立刻重连。
+      // §10.2.1 Call onForeground() on every foreground transition, including unlocks, returning from background tasks,
+      // and notification clicks. With injection active, returning after more than 1.5 seconds reconnects immediately.
       ImWebViewHolder.shared.onResumeWeb()
       ImWebViewHolder.shared.callWeb("onForeground")
       watchdog.onForeground()
@@ -644,7 +646,7 @@ final class ShellCore {
   }
 
   private func deliverNetwork(_ type: NetworkType) {
-    // §4 断网时不用调，传 none 会被忽略。
+    // §4 Do not report disconnection; none would be ignored.
     guard type != .none else { return }
     let wire: String
     switch type {
@@ -659,7 +661,7 @@ final class ShellCore {
 
   func currentNetworkType() -> NetworkType { network?.currentType ?? .none }
 
-  // ------------------------------------------------------------ 杂项
+  // ------------------------------------------------------------ Utilities
 
   func notifySplashDismissed(_ reason: ShellEventType) {
     emit(reason, nil, [:])
@@ -698,10 +700,10 @@ final class ShellCore {
     return top
   }
 
-  /// §8.3 不允许出现在任何常规路径上的调用。
+  /// §8.3 Calls prohibited on normal execution paths.
   ///
-  /// 只拦「清」，不拦「读」：§12.1 的自测要跑
-  /// `await navigator.serviceWorker.getRegistration()`，那是读，必须放行。
+  /// Block deletion but allow reads: the §12.1 self-test uses
+  /// `await navigator.serviceWorker.getRegistration()`, which must remain available.
   private static let forbiddenJs = [
     "caches.delete",
     ".unregister(",

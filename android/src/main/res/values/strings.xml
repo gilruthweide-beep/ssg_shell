@@ -1,15 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- §9.6 原生重试页。宿主可覆盖做本地化。 -->
-    <string name="ssg_shell_error_title">暂时打不开</string>
-    <string name="ssg_shell_error_body">请检查网络后重试</string>
-    <string name="ssg_shell_error_retry">重试</string>
-    <string name="ssg_shell_ssl_body">安全连接校验失败，请检查网络环境后重试</string>
-    <string name="ssg_shell_kernel_outdated">系统 WebView 版本过低，建议更新「Android System WebView」或 Chrome 后使用</string>
-    <string name="ssg_shell_kernel_update">去更新</string>
-    <string name="ssg_shell_kernel_ignore">忽略</string>
-    <!-- §6.2 麦克风被永久拒绝后的二次引导。 -->
-    <string name="ssg_shell_mic_denied">麦克风权限已关闭，请在系统设置中允许后再发送语音</string>
-    <string name="ssg_shell_open_settings">去设置</string>
-    <string name="ssg_shell_cancel">取消</string>
+    <!-- §9.6 Native retry screen. Hosts can override these resources for localization. -->
+    <string name="ssg_shell_error_title">Unable to load</string>
+    <string name="ssg_shell_error_body">Check your connection and try again.</string>
+    <string name="ssg_shell_error_retry">Try again</string>
+    <string name="ssg_shell_ssl_body">Secure connection verification failed. Check your network and try again.</string>
+    <string name="ssg_shell_kernel_outdated">Your WebView is outdated. Update Android System WebView or Chrome for better compatibility.</string>
+    <string name="ssg_shell_kernel_update">Update</string>
+    <string name="ssg_shell_kernel_ignore">Not now</string>
+    <!-- §6.2 Settings guidance after a microphone denial. -->
+    <string name="ssg_shell_mic_denied_title">Microphone is off</string>
+    <string name="ssg_shell_mic_denied">Allow microphone access in device settings, then return and try recording again.</string>
+    <!-- §6.2 Shown after login while notifications are off; push messages cannot arrive until enabled. -->
+    <string name="ssg_shell_notification_off_title">Notifications are off</string>
+    <string name="ssg_shell_notification_off_body">Turn on notifications in device settings to get alerts for new messages.</string>
+    <!-- Shared by the Settings guidance dialogs. -->
+    <string name="ssg_shell_open_settings">Open settings</string>
+    <string name="ssg_shell_cancel">Cancel</string>
 </resources>

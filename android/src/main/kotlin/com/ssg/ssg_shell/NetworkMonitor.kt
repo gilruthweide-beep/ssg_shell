@@ -11,18 +11,18 @@ import android.os.Looper
 import android.util.Log
 
 /**
- * §10.4 网络恢复单独通知。
+ * §10.4 Notify network recovery separately.
  *
- * 回前台瞬间网络往往还没真正可用（Wi-Fi 重连、蜂窝重新附着要几秒），此时 Web 发起的重连
- * 会失败。所以判据是「能发出请求」，不是 `ConnectivityManager` 的第一跳回调 —— 那时常常
- * 还没拿到 IP。这里用 `NET_CAPABILITY_VALIDATED` 作为「真的通了」的判据。
+ * Network availability can lag foreground entry by several seconds during Wi-Fi reconnection or cellular attachment,
+ * causing early reconnect attempts to fail. Require usable connectivity instead of the first ConnectivityManager callback,
+ * which can precede IP assignment. Use NET_CAPABILITY_VALIDATED to establish actual availability.
  *
- * 断网时不调（`onNetwork('none')` 会被 Web 忽略），也不在网络还没通时提前调：
- * 那次重试会失败，之后要等下一次重试。
+ * Do not call it when offline (`onNetwork('none')` is ignored by the Web), nor early before the network is usable:
+ * that retry would fail and then have to wait for the next one.
  *
- * 只在「恢复」和「切换」这两个边沿上通知。同一条网络上系统会因为带宽、信号变化反复回调
- * `onCapabilitiesChanged`，而 Web 每收到一次 `onNetwork` 都会立刻检查连接并拉取最新消息
- * （§10.4），这些重复回调不能转发。
+ * Notify only on the "restored" and "switched" edges. On the same network the system repeatedly calls
+ * `onCapabilitiesChanged` as bandwidth and signal change, and the Web immediately checks its connection and fetches the latest messages on every `onNetwork`
+ * (§10.4), so these repeated callbacks must not be forwarded.
  */
 internal class NetworkMonitor(
     private val context: Context,
@@ -38,14 +38,14 @@ internal class NetworkMonitor(
     var currentType: NetworkType = NetworkType.NONE
         private set
 
-    /** 已经通知过 Web 的那条网络。断开或失去 VALIDATED 时清空，下次恢复重新通知。 */
+    /** The network the Web has already been notified about. Cleared on disconnect or loss of VALIDATED; notified again on the next restore. */
     @Volatile
     private var notifiedNetwork: Network? = null
 
     @Volatile
     private var notifiedType: NetworkType? = null
 
-    /** 已经排进去抖、还没发出去的那一次。同一条不重排，否则回调够密的话永远发不出去。 */
+    /** The notification queued in the debounce but not yet sent. Not rescheduled for the same network, otherwise frequent enough callbacks would keep it from ever being sent. */
     @Volatile
     private var pendingNetwork: Network? = null
 
@@ -60,23 +60,23 @@ internal class NetworkMonitor(
             val type = typeOf(caps)
             currentType = if (validated) type else NetworkType.NONE
             if (!validated) {
-                // 这条网络又不通了（比如重新走认证）：撤掉还没发出去的通知，等它恢复。
+                // This network became unusable again (e.g. re-authenticating): cancel the pending notification and wait for it to recover.
                 forget()
                 return
             }
-            // 同一条网络、同一种类型已经通知过：只是带宽之类的属性变了。
+            // Same network and same type already notified: only properties such as bandwidth changed.
             if (network == notifiedNetwork && type == notifiedType) return
             if (network == pendingNetwork && type == pendingType) return
-            // Wi-Fi ↔ 蜂窝切换也要调；去抖 1~2 秒，不要每个系统回调都转发。
+            // Wi-Fi ↔ cellular switches also need a call; debounce 1-2 seconds instead of forwarding every system callback.
             schedule(network, type)
         }
 
         override fun onLost(network: Network) {
-            // 按能力订阅时（API 23）非默认网络断开不算断网。
+            // With capability-based subscription (API 23), a non-default network disconnecting does not count as offline.
             if (network != notifiedNetwork && network != pendingNetwork && !isDefault(network)) return
             currentType = NetworkType.NONE
             forget()
-            // 断网时不用调（§10.4.4）。
+            // No call needed when offline (§10.4.4).
         }
 
         override fun onUnavailable() {
@@ -91,8 +91,8 @@ internal class NetworkMonitor(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 cm.registerDefaultNetworkCallback(callback)
             } else {
-                // registerDefaultNetworkCallback 要 API 24，而 minSdk 是 23。
-                // Android 6.0 上退到按能力订阅，精度差一点（不只报默认网络），但不至于收不到。
+                // registerDefaultNetworkCallback requires API 24, while minSdk is 23.
+                // On Android 6.0 fall back to capability-based subscription: less precise (reports more than the default network), but callbacks still arrive.
                 cm.registerNetworkCallback(
                     NetworkRequest.Builder()
                         .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -101,9 +101,9 @@ internal class NetworkMonitor(
                 )
             }
             true
-        }.onFailure { Log.w(TAG, "注册网络回调失败", it) }.getOrDefault(false)
-        // 启动时先同步一次当前状态，但不触发回调：§10.4 要求网络真正可用后才调，
-        // 启动阶段 Web 还没挂出 __ssgShell。
+        }.onFailure { Log.w(TAG, "Unable to register network callback", it) }.getOrDefault(false)
+        // Synchronize initial network state without emitting a callback: §10.4 requires usable connectivity,
+        // and __ssgShell may not exist during startup.
         currentType = snapshotType()
     }
 
@@ -114,7 +114,7 @@ internal class NetworkMonitor(
         runCatching { manager?.unregisterNetworkCallback(callback) }
     }
 
-    /** API 24 起订阅的就是默认网络；API 23 是按能力订阅的，要自己筛。 */
+    /** From API 24 the subscription is the default network itself; API 23 subscribes by capability, so filter manually. */
     private fun isDefault(network: Network): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.N || network == manager?.activeNetwork
 
@@ -156,7 +156,7 @@ internal class NetworkMonitor(
         caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NetworkType.WIFI
         caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkType.CELLULAR
         caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> NetworkType.ETHERNET
-        // §4 其他取值归为 other。
+        // §4 Map other connection types to other.
         else -> NetworkType.OTHER
     }
 

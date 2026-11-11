@@ -13,18 +13,18 @@ import android.webkit.WebView
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * §7.1 `WebChromeClient` 回调。
+ * §7.1 WebChromeClient callbacks.
  *
- * 文件选择、麦克风授权、全屏视频、`window.open`、console 转发都在这里。
- * 任何一项缺失都是「点了没反应」，Web 侧看不到错误。
+ * File selection, microphone permission, fullscreen video, window.open, and console forwarding are handled here.
+ * Missing any callback leaves a feature unresponsive without exposing an error to the Web application.
  */
 internal class ShellWebChromeClient : WebChromeClient() {
 
     /**
-     * §7.1 / §7.3 发图片和视频 / 改头像。不实现附件按钮完全没反应。
+     * §7.1 / §7.3 Photo/video attachments and avatar selection; missing handling leaves the attachment button unresponsive.
      *
-     * 实现交给 [ShellWebViewHost]：必须直接进系统相册，中间不出现任何选择菜单，
-     * 也不能用 `fileChooserParams.createIntent()`（它打开的是文档选择器）。
+     * Delegate to [ShellWebViewHost], opening the system photo picker directly without intermediate menus,
+     * and avoid fileChooserParams.createIntent(), which opens a document picker.
      */
     override fun onShowFileChooser(
         webView: WebView,
@@ -33,8 +33,8 @@ internal class ShellWebChromeClient : WebChromeClient() {
     ): Boolean {
         val host = ImWebViewHolder.host
         if (host == null) {
-            // 没有 Activity 挂载时拉不起选择器。§7.3.3：必须回调 null，
-            // 漏了这一步此后点附件按钮永久无反应。
+            // Without an attached Activity the picker cannot open. §7.3.3 requires returning null;
+            // an unresolved callback would permanently disable subsequent attachment selection.
             filePathCallback.onReceiveValue(null)
             return true
         }
@@ -46,7 +46,7 @@ internal class ShellWebChromeClient : WebChromeClient() {
         }
     }
 
-    /** §7.1 授予 `RESOURCE_AUDIO_CAPTURE`，不实现语音录不了。 */
+    /** §7.1 Grant RESOURCE_AUDIO_CAPTURE to enable voice recording. */
     override fun onPermissionRequest(request: PermissionRequest) {
         val host = ImWebViewHolder.host
         if (host == null) {
@@ -56,12 +56,12 @@ internal class ShellWebChromeClient : WebChromeClient() {
         host.requestAudioPermission(request)
     }
 
-    /** §7.1 清理授权 UI，不实现会残留弹窗。 */
+    /** §7.1 Remove permission UI to avoid leaving a dialog open. */
     override fun onPermissionRequestCanceled(request: PermissionRequest) {
         ImWebViewHolder.host?.cancelPermissionRequest(request)
     }
 
-    /** §7.1 视频全屏。 */
+    /** §7.1 Fullscreen video. */
     override fun onShowCustomView(view: View, callback: CustomViewCallback) {
         val host = ImWebViewHolder.host
         if (host == null) {
@@ -76,14 +76,14 @@ internal class ShellWebChromeClient : WebChromeClient() {
     }
 
     /**
-     * §7.1 `target="_blank"` / `window.open`。不实现点链接没反应。
+     * §7.1 target="_blank" / window.open handling; missing it makes links unresponsive.
      *
-     * 行为对齐 iOS 的 `createWebViewWith`（§7.2「返回 nil 并在当前 WebView 加载」）：
-     * 外链交给系统浏览器，同源地址在当前实例里加载。
+     * Match iOS createWebViewWith behavior (§7.2: return nil and load in the existing WebView):
+     * open external links in the system browser and same-origin links in the current instance.
      *
-     * 拿目标 URL 只能靠一个临时 WebView —— Chromium 只把新窗口的首次导航派给
-     * transport 里的那个实例。它不会加载任何文档（`shouldOverrideUrlLoading` 直接
-     * 返回 true），所以不参与 §10.5 的 BroadcastChannel 主实例选举。
+     * A temporary WebView is needed to capture the target URL: Chromium routes the new window's first navigation
+     * to the transport instance. It never loads a document because shouldOverrideUrlLoading returns true,
+     * so it does not participate in the §10.5 BroadcastChannel primary-instance election.
      */
     override fun onCreateWindow(
         view: WebView,
@@ -97,7 +97,7 @@ internal class ShellWebChromeClient : WebChromeClient() {
         val disposed = AtomicBoolean(false)
         fun dispose() {
             if (!disposed.compareAndSet(false, true)) return
-            // 不在回调里同步 destroy：那是在 WebView 自己的调用栈上拆自己。
+            // Do not destroy synchronously inside the callback while WebView is still on its own call stack.
             handler.post { runCatching { probe.destroy() } }
         }
 
@@ -113,12 +113,12 @@ internal class ShellWebChromeClient : WebChromeClient() {
         }
         transport.webView = probe
         resultMsg.sendToTarget()
-        // window.open('') 之类不会产生导航，兜底回收，避免泄漏一个空实例。
+        // Some calls, such as window.open(''), never navigate; clean up the empty temporary view to avoid leaks.
         handler.postDelayed({ dispose() }, PROBE_TTL_MS)
         return true
     }
 
-    /** §7.1 / §11.6 转发到原生日志，不实现线上问题无法定位。 */
+    /** §7.1 / §11.6 Forward console output to native logs for production diagnostics. */
     override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
         ShellCore.onConsoleMessage(
             level = when (consoleMessage.messageLevel()) {

@@ -1,9 +1,9 @@
 import Foundation
 
-/// §11.6 console 环形缓冲。
+/// §11.6 Console ring buffer.
 ///
-/// 诊断入口要能「查看并导出最近 N 条 console」，所以日志不能只进 `NSLog` ——
-/// 线上设备拿不到控制台。容量满了丢最旧的。
+/// Diagnostics must display and export the latest N entries; NSLog alone is insufficient
+/// on production devices without a console. Evict the oldest entry at capacity.
 final class ConsoleLogBuffer {
 
   private let lock = NSLock()
@@ -32,7 +32,7 @@ final class ConsoleLogBuffer {
     lock.unlock()
   }
 
-  /// §11.6 导出用的纯文本。
+  /// §11.6 Plain-text format for exports.
   func dump() -> String {
     let formatter = DateFormatter()
     formatter.dateFormat = "MM-dd HH:mm:ss.SSS"
@@ -55,7 +55,7 @@ final class ConsoleLogBuffer {
 }
 
 extension ConsoleLevel {
-  /// JS 的 `console.warn` 对应 `warning`，其余同名。
+  /// JavaScript `console.warn` maps to `warning`; other levels retain their names.
   static func fromWire(_ raw: String) -> ConsoleLevel {
     switch raw.lowercased() {
     case "debug": return .debug

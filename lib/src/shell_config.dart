@@ -1,9 +1,9 @@
 import 'messages.g.dart';
 
-/// 壳的运行参数。
+/// Shell runtime configuration.
 ///
-/// 规范给的数值全部作为默认值落在这里 —— 原生侧只照单执行，不自己兜默认值，
-/// 所以调参只需要改这一处。时间量用 [Duration]，过线时再转成毫秒交给 Pigeon。
+/// Defaults from the specification are defined here; native code uses the supplied values
+/// without adding its own defaults. Use [Duration] here and convert to milliseconds at the Pigeon boundary.
 class ShellConfig {
   const ShellConfig({
     required this.entryUrl,
@@ -29,117 +29,119 @@ class ShellConfig {
     this.webViewFullscreen = false,
   });
 
-  /// §2.1 原样加载的完整落地 URL。
+  /// §2.1 Complete landing URL, loaded unchanged.
   ///
-  /// 渠道码可选，需要归因时直接写进 URL，例如
-  /// `https://im.example.com/?channelcode=ch001`。壳不补参、不删参、不重拼 query，
-  /// 参数名大小写、取值和存储由 Web 负责。
+  /// The channel code is optional. Include it directly in the URL when attribution is needed, for example
+  /// `https://im.example.com/?channelcode=ch001`. The shell does not add, remove, or rebuild query parameters;
+  /// the Web application owns parameter casing, values, and storage.
   ///
-  /// §8.1 必须是 HTTPS：`isSecureContext === false` 时 Service Worker 注册不了，
-  /// 媒体加载与缓存全部降级。
+  /// §8.1 HTTPS is required: Service Worker registration fails when `isSecureContext === false`,
+  /// and media loading and caching fall back to reduced functionality.
   final String entryUrl;
 
-  /// 旧版兼容字段，不再参与 URL 加载或渠道归因。
+  /// Legacy compatibility field; ignored for URL loading and channel attribution.
   ///
-  /// 渠道码通过 [entryUrl] 传入；不带渠道码也是有效配置。
+  /// Pass the optional channel code through [entryUrl]. URLs without one are also valid.
   @Deprecated('Put channelcode in entryUrl; this value is ignored.')
   final String channelCode;
 
-  /// §1.1 / §2.2 壳版本，同时进 `__SSG_SHELL__` 和 UA 后缀。
-  /// 留空时原生取宿主的 `versionName` / `CFBundleShortVersionString`。
+  /// §1.1 / §2.2 Shell version used in `__SSG_SHELL__` and the user-agent suffix.
+  /// When empty, native code uses the host's `versionName` / `CFBundleShortVersionString`.
   final String shellVersion;
 
-  /// §9.6 B 面开关。原生会落盘，下次冷启动直接按缓存走，不等 Dart ——
-  /// 所以「B 面开关的判断」不会以等待界面的形式出现在用户面前。
+  /// §9.6 B side switch. Native code persists it, and the next cold start uses the cached value directly without waiting for Dart,
+  /// so "deciding the B side switch" never appears to the user as a waiting screen.
   ///
-  /// 不传（null）表示**沿用已经落盘的值**，从没设过时是关。这样每次启动照常调
-  /// `initialize()` 不会把 [SsgShell.setBSideEnabled] 存下的结果冲掉。
-  /// 传 true / false 则以这次为准并落盘。
+  /// Omitting it (null) means **keep the already persisted value**, which is off if never set. This way calling
+  /// `initialize()` as usual on every launch does not overwrite the result saved by [SsgShell.setBSideEnabled].
+  /// Passing true / false makes this value authoritative and persists it.
   final bool? bSideEnabled;
 
-  /// §9.6 splash 上限。`eventWebReady` 可能永远不来（内核过低的不兼容页、
-  /// 脚本加载失败的重试页），到时撤掉 splash 让用户看到页面或原生重试页。
+  /// §9.6 Maximum splash duration. `eventWebReady` may never arrive on an unsupported engine
+  /// or script-loading error page. Remove the splash at the deadline to reveal the page or native retry UI.
   final Duration splashTimeout;
 
-  /// §11.1 原生心跳周期。规范值 20 秒，必须用原生定时器。
+  /// §11.1 Native heartbeat interval. The specification requires a native timer every 20 seconds.
   final Duration heartbeatInterval;
 
-  /// §11.2 多久没收到 `eventWebAlive` 判定卡死。规范值 60 秒。
+  /// §11.2 Treat the page as unresponsive after 60 seconds without `eventWebAlive`.
   final Duration aliveTimeout;
 
-  /// §11.2.3 reload 后多久没开始加载就重建 WebView。规范值 10 秒。
+  /// §11.2.3 Recreate the WebView if loading has not started within 10 seconds after reload.
   final Duration reloadConfirmTimeout;
 
-  /// §11.2.5 第一次处理后的退避。规范值 180 秒。
+  /// §11.2.5 Initial recovery backoff: 180 seconds.
   final Duration recoveryBackoffFirst;
 
-  /// §11.2.5 之后的退避。规范值 600 秒。
+  /// §11.2.5 Subsequent recovery backoff: 600 seconds.
   final Duration recoveryBackoffLater;
 
-  /// §10.4 网络回调去抖。规范区间 1~2 秒，不要每个系统回调都转发。
+  /// §10.4 Debounce network callbacks by 1–2 seconds instead of forwarding every system callback.
   final Duration networkDebounce;
 
-  /// §5.4 前台抑制：用户正停在该会话时不弹系统通知。
+  /// §5.4 Suppress foreground notifications while the user is viewing the matching conversation.
   final bool suppressForegroundNotifications;
 
-  /// §5.4 由插件按 `unreadCount` 自动设角标。关掉就自己调 [SsgShell.setBadgeCount]。
+  /// §5.4 Automatically update the badge from `unreadCount`. Disable to manage it through [SsgShell.setBadgeCount].
   final bool manageBadge;
 
-  /// §8.1 内核硬性下限 92。低于它 `crypto.randomUUID` 等能力缺失。
+  /// §8.1 Minimum supported engine version: 92. Earlier versions lack APIs such as `crypto.randomUUID`.
   final int minKernelVersion;
 
-  /// §8.1 推荐 110。介于两者之间只记一条诊断，不提示用户。
+  /// §8.1 Recommended version: 110. Versions between these limits produce diagnostics without prompting the user.
   final int recommendedKernelVersion;
 
-  /// §11.6 console 环形缓冲条数，诊断导出时取这些。
+  /// §11.6 Number of console entries retained in the ring buffer for diagnostic exports.
   final int consoleBufferSize;
 
-  /// §9.4 窗口与 WebView 背景色。规范要求白色：安全区外露出的状态栏 / 底部条
-  /// 一律白底深色图标，登录页和深色模式下也一样。
+  /// §9.4 Window and WebView background. The specification requires white safe areas with dark icons
+  /// for the status bar and bottom navigation area, including login screens and dark mode.
   final int backgroundColorArgb;
 
-  /// §11.6 把 Web 的 console 落到原生日志并上抛 Dart。
+  /// §11.6 Forward Web console output to native logs and Dart.
   final bool forwardConsole;
 
-  /// 没有实现，两端都忽略这个值：WebView 始终按 §9.4 摆在安全区内。
+  /// Not implemented; both platforms ignore this value: the WebView always stays within the safe area per §9.4.
   ///
-  /// 保留字段只为不改动 Pigeon 的消息格式。
+  /// The field is kept only to avoid changing the Pigeon message format.
   @Deprecated('Not implemented on either platform; this value is ignored.')
   final bool webViewFullscreen;
 
-  /// §8.1 HTTPS 自检。`http://localhost` 之类的本地调试地址放行。
+  /// §8.1 HTTPS check. Local development URLs such as `http://localhost` are allowed.
   bool get isSecureEntry {
     final uri = Uri.tryParse(entryUrl);
     if (uri == null) return false;
     if (uri.scheme == 'https') return true;
     return uri.scheme == 'http' &&
-        (uri.host == 'localhost' || uri.host == '127.0.0.1' || uri.host == '10.0.2.2');
+        (uri.host == 'localhost' ||
+            uri.host == '127.0.0.1' ||
+            uri.host == '10.0.2.2');
   }
 
-  /// [persistedBSide] 是原生已经落盘的 B 面开关，只在 [bSideEnabled] 没传时用到。
+  /// [persistedBSide] is the B side switch already persisted by native code, used only when [bSideEnabled] is omitted.
   ShellConfigDto toDto({bool persistedBSide = false}) => ShellConfigDto(
-        entryUrl: entryUrl,
-        // 保留 Pigeon 的旧字段位置，避免改变消息格式；原生不再使用它。
-        channelCode: '',
-        shellVersion: shellVersion,
-        bSideEnabled: bSideEnabled ?? persistedBSide,
-        splashTimeoutMs: splashTimeout.inMilliseconds,
-        heartbeatIntervalMs: heartbeatInterval.inMilliseconds,
-        aliveTimeoutMs: aliveTimeout.inMilliseconds,
-        reloadConfirmTimeoutMs: reloadConfirmTimeout.inMilliseconds,
-        recoveryBackoffFirstMs: recoveryBackoffFirst.inMilliseconds,
-        recoveryBackoffLaterMs: recoveryBackoffLater.inMilliseconds,
-        networkDebounceMs: networkDebounce.inMilliseconds,
-        suppressForegroundNotifications: suppressForegroundNotifications,
-        manageBadge: manageBadge,
-        minKernelVersion: minKernelVersion,
-        recommendedKernelVersion: recommendedKernelVersion,
-        consoleBufferSize: consoleBufferSize,
-        backgroundColorArgb: backgroundColorArgb,
-        forwardConsole: forwardConsole,
-        // 保留 Pigeon 的字段位置；原生不读它。
-        webViewFullscreen: false,
-      );
+    entryUrl: entryUrl,
+    // Keep the old Pigeon field position to avoid changing the message format; native code no longer uses it.
+    channelCode: '',
+    shellVersion: shellVersion,
+    bSideEnabled: bSideEnabled ?? persistedBSide,
+    splashTimeoutMs: splashTimeout.inMilliseconds,
+    heartbeatIntervalMs: heartbeatInterval.inMilliseconds,
+    aliveTimeoutMs: aliveTimeout.inMilliseconds,
+    reloadConfirmTimeoutMs: reloadConfirmTimeout.inMilliseconds,
+    recoveryBackoffFirstMs: recoveryBackoffFirst.inMilliseconds,
+    recoveryBackoffLaterMs: recoveryBackoffLater.inMilliseconds,
+    networkDebounceMs: networkDebounce.inMilliseconds,
+    suppressForegroundNotifications: suppressForegroundNotifications,
+    manageBadge: manageBadge,
+    minKernelVersion: minKernelVersion,
+    recommendedKernelVersion: recommendedKernelVersion,
+    consoleBufferSize: consoleBufferSize,
+    backgroundColorArgb: backgroundColorArgb,
+    forwardConsole: forwardConsole,
+    // Keep the Pigeon field position; native code does not read it.
+    webViewFullscreen: false,
+  );
 
   ShellConfig copyWith({
     String? entryUrl,
@@ -163,34 +165,35 @@ class ShellConfig {
     bool? forwardConsole,
     @Deprecated('Not implemented on either platform; this value is ignored.')
     bool? webViewFullscreen,
-  }) =>
-      ShellConfig(
-        entryUrl: entryUrl ?? this.entryUrl,
-        // 仅保留旧字段的副本，URL 和 Pigeon 配置不会使用它。
-        // ignore: deprecated_member_use_from_same_package
-        channelCode: channelCode ?? this.channelCode,
-        shellVersion: shellVersion ?? this.shellVersion,
-        bSideEnabled: bSideEnabled ?? this.bSideEnabled,
-        splashTimeout: splashTimeout ?? this.splashTimeout,
-        heartbeatInterval: heartbeatInterval ?? this.heartbeatInterval,
-        aliveTimeout: aliveTimeout ?? this.aliveTimeout,
-        reloadConfirmTimeout: reloadConfirmTimeout ?? this.reloadConfirmTimeout,
-        recoveryBackoffFirst: recoveryBackoffFirst ?? this.recoveryBackoffFirst,
-        recoveryBackoffLater: recoveryBackoffLater ?? this.recoveryBackoffLater,
-        networkDebounce: networkDebounce ?? this.networkDebounce,
-        suppressForegroundNotifications:
-            suppressForegroundNotifications ?? this.suppressForegroundNotifications,
-        manageBadge: manageBadge ?? this.manageBadge,
-        minKernelVersion: minKernelVersion ?? this.minKernelVersion,
-        recommendedKernelVersion: recommendedKernelVersion ?? this.recommendedKernelVersion,
-        consoleBufferSize: consoleBufferSize ?? this.consoleBufferSize,
-        backgroundColorArgb: backgroundColorArgb ?? this.backgroundColorArgb,
-        forwardConsole: forwardConsole ?? this.forwardConsole,
-        // ignore: deprecated_member_use_from_same_package
-        webViewFullscreen: webViewFullscreen ?? this.webViewFullscreen,
-      );
+  }) => ShellConfig(
+    entryUrl: entryUrl ?? this.entryUrl,
+    // Only keeps a copy of the old field; neither the URL nor the Pigeon config uses it.
+    // ignore: deprecated_member_use_from_same_package
+    channelCode: channelCode ?? this.channelCode,
+    shellVersion: shellVersion ?? this.shellVersion,
+    bSideEnabled: bSideEnabled ?? this.bSideEnabled,
+    splashTimeout: splashTimeout ?? this.splashTimeout,
+    heartbeatInterval: heartbeatInterval ?? this.heartbeatInterval,
+    aliveTimeout: aliveTimeout ?? this.aliveTimeout,
+    reloadConfirmTimeout: reloadConfirmTimeout ?? this.reloadConfirmTimeout,
+    recoveryBackoffFirst: recoveryBackoffFirst ?? this.recoveryBackoffFirst,
+    recoveryBackoffLater: recoveryBackoffLater ?? this.recoveryBackoffLater,
+    networkDebounce: networkDebounce ?? this.networkDebounce,
+    suppressForegroundNotifications:
+        suppressForegroundNotifications ?? this.suppressForegroundNotifications,
+    manageBadge: manageBadge ?? this.manageBadge,
+    minKernelVersion: minKernelVersion ?? this.minKernelVersion,
+    recommendedKernelVersion:
+        recommendedKernelVersion ?? this.recommendedKernelVersion,
+    consoleBufferSize: consoleBufferSize ?? this.consoleBufferSize,
+    backgroundColorArgb: backgroundColorArgb ?? this.backgroundColorArgb,
+    forwardConsole: forwardConsole ?? this.forwardConsole,
+    // ignore: deprecated_member_use_from_same_package
+    webViewFullscreen: webViewFullscreen ?? this.webViewFullscreen,
+  );
 
   @override
-  String toString() => 'ShellConfig(entryUrl: $entryUrl, '
+  String toString() =>
+      'ShellConfig(entryUrl: $entryUrl, '
       'shellVersion: $shellVersion, bSideEnabled: $bSideEnabled)';
 }

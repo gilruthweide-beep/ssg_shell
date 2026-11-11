@@ -5,24 +5,24 @@ import android.content.pm.PackageManager
 import android.net.Uri
 
 /**
- * 壳的运行参数。
+ * Shell runtime configuration.
  *
- * 有两个来源，按优先级合并：
- *  1. Dart 调 [SsgShellHostApi.initialize] 传下来的 [ShellConfigDto]；
- *  2. 宿主 Manifest 的 `<meta-data>`。
+ * Merge two configuration sources in priority order:
+ *  1. [ShellConfigDto] supplied by Dart through [SsgShellHostApi.initialize].
+ *  2. Host Manifest `<meta-data>`.
  *
- * 之所以两套都要，是因为 §8.4 体验与性能 2 要求 `ImActivity` 可以直接当冷启动的第一个
- * Activity。那条路径上 Flutter 引擎还没起来，拿不到 Dart 的配置，只能读 Manifest
- * 加上一份落盘的缓存（§9.6「把上次的结果缓存在本地，冷启动直接按缓存走」）。
+ * Both sources are required because §8.4 Performance 2 allows ImActivity to be the first
+ * cold-start Activity before Flutter starts. That path cannot read Dart configuration and instead uses Manifest values
+ * with persisted cache values, as required by §9.6.
  */
 internal data class ShellConfig(
-    /** §2.1 完整落地 URL，原样加载；渠道码可选，由 Web 读取。 */
+    /** §2.1 Complete landing URL, loaded unchanged; the Web application reads its optional channel code. */
     val entryUrl: String,
-    /** 旧版兼容字段，已忽略，不参与 URL 加载或渠道归因。 */
+    /** Ignored legacy compatibility field; it does not affect URL loading or attribution. */
     val channelCode: String = "",
-    /** §1.1 / §2.2 壳版本。 */
+    /** §1.1 / §2.2 Shell version. */
     val shellVersion: String,
-    /** §9.6 B 面开关。 */
+    /** §9.6 B-side switch. */
     val bSideEnabled: Boolean,
     val splashTimeoutMs: Long = 30_000,
     val heartbeatIntervalMs: Long = 20_000,
@@ -39,10 +39,10 @@ internal data class ShellConfig(
     val backgroundColorArgb: Int = 0xFFFFFFFF.toInt(),
     val forwardConsole: Boolean = true,
 ) {
-    /** §2.1 原样返回落地 URL，不解析或重拼 query。 */
+    /** §2.1 Return the complete landing URL unchanged without rebuilding its query. */
     fun resolvedUrl(): String = entryUrl
 
-    /** §10.5 判定「是不是 IM 域名」用的 host，用于 §7.1 的外链放行。 */
+    /** §10.5 IM host used by §7.1 to identify external links. */
     fun entryHost(): String? = runCatching { Uri.parse(entryUrl).host }.getOrNull()
 
     internal companion object {
@@ -57,7 +57,7 @@ internal data class ShellConfig(
         private const val KEY_B_SIDE = "bSideEnabled"
         private const val KEY_KERNEL_WARNED = "kernelWarned"
 
-        /** 读 Manifest `<meta-data>` 加上落盘缓存，Dart 还没上线时就用这份。 */
+        /** Read Manifest metadata and persisted cache values before Dart is available. */
         fun fromDisk(context: Context): ShellConfig {
             val meta = metaData(context)
             val prefs = context.applicationContext
@@ -65,11 +65,11 @@ internal data class ShellConfig(
             val metaEntry = meta?.getString(META_ENTRY_URL).orEmpty()
             val metaVersion = meta?.getString(META_SHELL_VERSION).orEmpty()
             return ShellConfig(
-                // 落盘的完整入口 URL 优先，包含宿主配置的可选渠道码。
+                // The persisted complete landing URL takes priority, including its optional channel code.
                 entryUrl = prefs.getString(KEY_ENTRY_URL, null) ?: metaEntry,
                 shellVersion = prefs.getString(KEY_SHELL_VERSION, null)
                     ?: metaVersion.ifBlank { appVersionName(context) },
-                // §9.6 没有缓存时默认关：没确认过 B 面就不要抢在 A 面前面。
+                // §9.6 Default to disabled without a cache; do not open B side before it has been enabled.
                 bSideEnabled = prefs.getBoolean(KEY_B_SIDE, false),
             )
         }
@@ -108,7 +108,7 @@ internal data class ShellConfig(
                 .edit().putBoolean(KEY_B_SIDE, enabled).apply()
         }
 
-        /** §11.7 内核过低的提示只给一次，用户忽略了就不再烦他。 */
+        /** §11.7 Show outdated-engine guidance once and respect dismissal. */
         fun kernelWarned(context: Context): Boolean =
             context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getBoolean(KEY_KERNEL_WARNED, false)

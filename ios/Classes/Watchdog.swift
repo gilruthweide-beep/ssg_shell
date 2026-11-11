@@ -1,12 +1,12 @@
 import Foundation
 
-/// §11.1 原生心跳 + §11.2 存活监测与兜底 reload。
+/// §11.1 Native heartbeat and §11.2 liveness monitoring with recovery reloads.
 ///
-/// 这是唯一能从主线程彻底卡死里恢复的机制 —— 那种状态下只有原生看得见：界面正常、
-/// 能点能滑，但消息不进不出。
+/// Only native code can detect and recover a blocked Web main thread: the UI can appear normal
+/// and still respond to taps or scrolling while messages stop arriving or sending.
 ///
-/// 全部用原生 `Timer`（§11.1 明确要求）。用 WebView 里的 JS 定时器会被一起冻住，
-/// 等于没做。
+/// Use native `Timer` instances, as §11.1 requires. JavaScript timers in the same WebView
+/// would freeze together with the page and provide no protection.
 final class Watchdog {
 
   private let config: () -> ShellConfig
@@ -21,21 +21,21 @@ final class Watchdog {
 
   private var running = false
 
-  /// §11.2.0 收到第一条 `eventWebAlive` 之后才开始计时。
+  /// §11.2.0 Start timing only after the first `eventWebAlive`.
   private var firstAliveSeen = false
   private var lastAliveAt: TimeInterval = 0
 
-  /// §11.2.5 同一次卡死只处理一次；页面没恢复就按 180 秒 / 600 秒退避着再处理。
+  /// §11.2.5 Handle each stall only once; if the page has not recovered, handle it again with 180-second / 600-second backoff.
   private var backoff: RecoveryBackoff
 
-  /// reload 之后有没有真的开始加载（§11.2.3）。
+  /// Whether loading actually started after reload (§11.2.3).
   private var awaitingPageStart = false
 
   private(set) var reloadCount = 0
   private(set) var recreateCount = 0
   private(set) var lastReloadAtMs: Int64?
 
-  /// 判定周期。比 aliveTimeout 细，保证超时后最多 5 秒内被发现。
+  /// Poll more often than aliveTimeout to detect a timeout within five seconds.
   private let checkPeriod: TimeInterval = 5
 
   init(
@@ -60,12 +60,12 @@ final class Watchdog {
     lastAliveAt > 0 ? Int64(lastAliveAt * 1000) : nil
   }
 
-  // ------------------------------------------------------------------ 生命周期
+  // ------------------------------------------------------------------ Lifecycle
 
-  /// §11.1 进前台：心跳开始；§11.2.4 回前台把「最后收到时间」重置为当前。
+  /// §11.1 Start heartbeats in the foreground; §11.2.4 reset the last-alive time on foreground entry.
   func onForeground() {
-    // Web 在 onBackground 后停发 eventWebAlive，回前台要等下一个 15 秒周期，
-    // 不重置会被误判卡死。
+    // The Web application stops eventWebAlive after onBackground and may take 15 seconds to emit it again;
+    // without resetting the timestamp, foreground entry could cause a false timeout.
     lastAliveAt = Date().timeIntervalSince1970
     guard !running else { return }
     running = true
@@ -79,12 +79,12 @@ final class Watchdog {
       guard let self, self.running else { return }
       self.checkAlive()
     }
-    // 页面滚动、键盘动画会把 default 模式的 Timer 挤掉，心跳不能跟着漂。
+    // Scrolling and keyboard animations can delay default-mode timers; keep the heartbeat interval stable.
     if let heartbeatTimer { RunLoop.main.add(heartbeatTimer, forMode: .common) }
     if let aliveTimer { RunLoop.main.add(aliveTimer, forMode: .common) }
   }
 
-  /// §11.1 进后台：心跳停止；§11.2.4 后台期间不计时、不判定。
+  /// §11.1 Stop heartbeats in the background; §11.2.4 pause liveness timing and detection.
   func onBackground() {
     running = false
     heartbeatTimer?.invalidate()
@@ -100,27 +100,27 @@ final class Watchdog {
     onBackground()
   }
 
-  // --------------------------------------------------------------- 存活监测
+  // --------------------------------------------------------------- Liveness monitoring
 
-  /// §3.1 `eventWebAlive`：前台每 15 秒一次。
+  /// §3.1 `eventWebAlive` arrives every 15 seconds in the foreground.
   func onWebAlive() {
     firstAliveSeen = true
     lastAliveAt = Date().timeIntervalSince1970
     guard backoff.onAlive(now: lastAliveAt) else { return }
-    // 处理之后页面第一次重新发来 alive。退避窗口照旧：这条多半是新页面刚加载时发的，
-    // 撑过整个窗口才算真正恢复（见 RecoveryBackoff）。
-    NSLog("[SsgShell] 处理之后页面重新发来 eventWebAlive")
+    // The first alive since the last handling. The backoff window stays: this one usually comes from the
+    // freshly loaded page, and only outliving the whole window counts as recovery (see RecoveryBackoff).
+    NSLog("[SsgShell] eventWebAlive received again after handling a stall")
     awaitingPageStart = false
     reloadConfirm?.cancel()
     reloadConfirm = nil
   }
 
   private func checkAlive() {
-    // §11.2.0 收到第一条之前永远不判定卡死，否则原生先上线、Web 还没发，
-    // 会每 60 秒 reload 一次。例外：处理过一次卡死、之后还没等到 alive（重建会把
-    // firstAliveSeen 清掉）。这个页面本来是发 alive 的，要继续盯着，由退避窗口防止循环。
+    // §11.2.0 Never declare a stall before the first one arrives; otherwise, with native up first and the Web not yet sending,
+    // it would reload every 60 seconds. Exception: a stall was handled and no alive has arrived since (recreation clears
+    // firstAliveSeen). This page did send alive before, so keep watching and let the backoff window prevent a loop.
     guard firstAliveSeen || backoff.awaitingAlive else { return }
-    // reload 刚发出去，这 10 秒归 reloadConfirm 管。
+    // A reload was just issued; these 10 seconds belong to reloadConfirm.
     guard !awaitingPageStart else { return }
     let silence = Date().timeIntervalSince1970 - lastAliveAt
     guard silence > config().aliveTimeout else { return }
@@ -137,34 +137,34 @@ final class Watchdog {
     case .throttled(wait: _, firstReport: false):
       return
     case .throttled(wait: let wait, firstReport: true):
-      // §11.2.5 上一次处理之后页面还没恢复：等退避窗口到期再处理，不能进 reload 循环。
+      // §11.2.5 The page has not recovered since the last handling: wait for the backoff window to expire before handling again, to avoid a reload loop.
       let waitMs = Int(wait * 1000)
-      emit(.stallDetected, "已 \(silenceMs)ms 未收到 eventWebAlive", ["silenceMs": "\(silenceMs)"])
-      emit(.recoveryThrottled, "退避中，\(waitMs)ms 后才允许下一次处理", ["waitMs": "\(waitMs)"])
+      emit(.stallDetected, "No eventWebAlive for \(silenceMs)ms", ["silenceMs": "\(silenceMs)"])
+      emit(.recoveryThrottled, "Backing off; next handling allowed in \(waitMs)ms", ["waitMs": "\(waitMs)"])
       return
     case .recover(attempt: let number, backoff: let wait):
       attempt = number
       backoffMs = Int(wait * 1000)
     }
-    emit(.stallDetected, "已 \(silenceMs)ms 未收到 eventWebAlive", ["silenceMs": "\(silenceMs)"])
+    emit(.stallDetected, "No eventWebAlive for \(silenceMs)ms", ["silenceMs": "\(silenceMs)"])
 
-    // §11.2.6 reload / 重建前后各记一条本地日志。
-    NSLog("[SsgShell] 判定卡死（静默 \(silenceMs)ms，第 \(attempt) 次），执行 reload")
+    // §11.2.6 Write a local log entry before and after each reload / recreation.
+    NSLog("[SsgShell] Stall detected (silent \(silenceMs)ms, attempt \(attempt)); reloading")
     reloadCount += 1
     lastReloadAtMs = Int64(now * 1000)
     awaitingPageStart = true
     reload()
     emit(
       .reloadIssued,
-      "第 \(attempt) 次恢复，下次最早 \(backoffMs)ms 后",
+      "Recovery attempt \(attempt); next one no earlier than \(backoffMs)ms from now",
       ["attempt": "\(attempt)", "backoffMs": "\(backoffMs)"]
     )
 
-    // §11.2.3 reload 后 10 秒内页面没有开始加载 → 销毁并重建。
-    // 页面主线程卡死时 WebKit 会把 reload 排在卡住的 JS 后面，reload 不生效。
+    // §11.2.3 If loading does not start within 10 seconds of reload, destroy and recreate the WebView.
+    // When the page main thread is blocked, WebKit may queue reload behind the stuck JavaScript.
     let confirm = DispatchWorkItem { [weak self] in
       guard let self, self.awaitingPageStart else { return }
-      NSLog("[SsgShell] reload 未生效（没有 didStartProvisionalNavigation），重建 WebView")
+      NSLog("[SsgShell] Reload did not start (no didStartProvisionalNavigation); recreating WebView")
       self.awaitingPageStart = false
       self.recreateCount += 1
       self.recreate()
@@ -177,25 +177,25 @@ final class Watchdog {
     )
   }
 
-  /// §11.2.3 判断 reload 到底有没有生效（`didStartProvisionalNavigation`）。
+  /// §11.2.3 Track whether reload took effect through `didStartProvisionalNavigation`.
   func onPageStarted() {
     guard awaitingPageStart else { return }
     awaitingPageStart = false
     reloadConfirm?.cancel()
     reloadConfirm = nil
-    NSLog("[SsgShell] reload 已生效（didStartProvisionalNavigation）")
+    NSLog("[SsgShell] Reload started (didStartProvisionalNavigation)")
   }
 
-  /// 页面被重新加载（reload、重建、被踢下线后刷新）时，`eventWebAlive` 的计时要跟着
-  /// 重置，否则刚 reload 完就又判定一次卡死。
+  /// Reset eventWebAlive timing whenever the page reloads, is recreated, or refreshes after logout,
+  /// so a just-reloaded page is not immediately declared unresponsive again.
   func onPageLoadStartedExternally() {
     lastAliveAt = Date().timeIntervalSince1970
   }
 
-  /// WebView 实例被换掉：重新开始攒 alive，但保留退避窗口。
+  /// The WebView instance was replaced: start collecting alive again, but keep the backoff window.
   ///
-  /// 是看门狗自己触发的重建时 `checkAlive` 不会因为 firstAliveSeen 被清掉而停下 ——
-  /// 新页面仍然没动静的话，退避窗口到期后要再处理一次（§11.2.5）。
+  /// When the watchdog itself triggered the recreation, `checkAlive` does not stop because firstAliveSeen was cleared;
+  /// if the new page is still silent, handle it again once the backoff window expires (§11.2.5).
   func onWebViewRecreated() {
     firstAliveSeen = false
     lastAliveAt = Date().timeIntervalSince1970

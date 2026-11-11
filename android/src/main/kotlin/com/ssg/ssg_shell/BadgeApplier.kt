@@ -8,18 +8,18 @@ import android.util.Log
 import androidx.core.net.toUri
 
 /**
- * §5.4 角标。
+ * §5.4 Badge updates.
  *
- * Android 没有统一的角标 API，各家 launcher 自己一套。这里做尽力而为的实现：
+ * Android launchers expose different badge APIs, so this implementation uses best-effort support:
  *
- * - 三星 / 索尼 / LG / HTC / 一加等：`android.intent.action.BADGE_COUNT_UPDATE` 广播。
- * - 华为 / 荣耀：`content://com.huawei.android.launcher.settings/badge/` provider。
- * - **小米 / OPPO / vivo 拿不到**：这几家只认挂在通知上的角标数，必须由推送侧下发
- *   （OneSignal 的通知里带 badge），原生改不了。
+ * - Samsung / Sony / LG / HTC / OnePlus and others: `android.intent.action.BADGE_COUNT_UPDATE` broadcasts.
+ * - Huawei / Honor: the `content://com.huawei.android.launcher.settings/badge/` provider.
+ * - **Xiaomi / OPPO / vivo require push-supplied badge counts** attached to notifications;
+ *   native badge updates cannot replace the badge value in the OneSignal notification.
  *
- * 所以 §12.3 的角标验收在小米 / OPPO / vivo 上要靠服务端在推送里带未读数；
- * 本类负责的是「App 自己能改的那部分」，以及 `count == 0` 时的清零。
- * iOS 侧是精确的（`setApplicationIconBadgeNumber`）。
+ * Therefore §12.3 badge validation on those launchers requires the server to include the unread count in each push.
+ * This class manages locally supported badge updates and clearing when `count == 0`.
+ * iOS supports exact counts through `setApplicationIconBadgeNumber`.
  */
 internal object BadgeApplier {
 
@@ -29,7 +29,7 @@ internal object BadgeApplier {
         val ctx = context.applicationContext
         val safe = count.coerceAtLeast(0)
         val launcher = launcherComponent(ctx) ?: run {
-            Log.w(TAG, "找不到 launcher Activity，角标设置跳过")
+            Log.w(TAG, "No launcher Activity found; skipping badge update")
             return
         }
         broadcastBadge(ctx, launcher, safe)
@@ -55,7 +55,7 @@ internal object BadgeApplier {
                     putExtra("badge_count", count)
                     putExtra("badge_count_package_name", launcher.packageName)
                     putExtra("badge_count_class_name", launcher.className)
-                    // 部分 ROM 从 Android 8 起要求显式包名才肯收。
+                    // Some Android 8+ vendor ROMs require an explicit package name on the broadcast.
                     `package` = "com.sec.android.app.launcher"
                 },
             )
@@ -66,7 +66,7 @@ internal object BadgeApplier {
                     putExtra("badge_count_class_name", launcher.className)
                 },
             )
-        }.onFailure { Log.w(TAG, "角标广播失败", it) }
+        }.onFailure { Log.w(TAG, "Badge broadcast failed", it) }
     }
 
     private fun huaweiBadge(context: Context, launcher: ComponentName, count: Int) {
@@ -82,6 +82,6 @@ internal object BadgeApplier {
                 null,
                 extras,
             )
-        }.onFailure { /* 非华为设备上必然失败，不记日志免得刷屏 */ }
+        }.onFailure { /* Expected to fail on non-Huawei devices; avoid noisy logs. */ }
     }
 }

@@ -2,13 +2,13 @@ group = "com.ssg.ssg_shell"
 version = "1.0.2"
 
 buildscript {
-    ext.kotlin_version = "1.9.24"
+    ext.kotlin_version = "2.2.20"
     repositories {
         google()
         mavenCentral()
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:8.7.0")
+        classpath("com.android.tools.build:gradle:8.10.1")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
     }
 }
@@ -42,8 +42,8 @@ android {
 
     defaultConfig {
         minSdk = 23
-        // §8.4 体验与性能 4：桥接方法只被 JS 调用，R8 必须保留。
-        // 消费方即使换了自己的规则文件也会合并到这条。
+        // §8.4 Performance 4: R8 must retain bridge methods called only by JavaScript.
+        // This rule is merged even when the consuming application uses its own rules file.
         consumerProguardFiles "consumer-rules.pro"
     }
 
@@ -51,20 +51,20 @@ android {
         // §1.2 addDocumentStartJavaScript、§11.2 getWebViewRenderProcess().terminate()、
         // §11.7 getCurrentWebViewPackage()
         implementation "androidx.webkit:webkit:1.12.1"
-        // §4 / §10.2 进程级前后台判定，不依赖宿主 Activity
+        // §4 / §10.2 Process-level foreground/background tracking, independent of the host Activity.
         implementation "androidx.lifecycle:lifecycle-process:2.8.7"
-        // §8.4 ComponentActivity + OnBackPressedDispatcher（§9.1 预测性返回）
+        // §8.4 ComponentActivity + OnBackPressedDispatcher for §9.1 predictive back.
         // §7.3 ActivityResultContracts.PickVisualMedia
         implementation "androidx.activity:activity-ktx:1.9.3"
-        // §9.6 系统 SplashScreen
+        // §9.6 System SplashScreen.
         implementation "androidx.core:core-splashscreen:1.0.1"
-        // §8.4 体验与性能 1：进程启动即预创建 WebView，不等 Dart
+        // §8.4 Performance 1: create the WebView at process startup without waiting for Dart.
         implementation "androidx.startup:startup-runtime:1.2.0"
 
         testImplementation "org.jetbrains.kotlin:kotlin-test"
         testImplementation "junit:junit:4.13.2"
-        // WebEventParser 用 org.json 解析 §3.1 的 payload。单元测试的 android.jar 里
-        // 那套是会抛 "not mocked" 的桩，所以把真的那份放进测试 classpath。
+        // WebEventParser uses org.json for §3.1 payloads. The unit-test android.jar implementation
+        // contains stubs that throw "not mocked", so use a real implementation on the test classpath.
         testImplementation "org.json:json:20231013"
     }
 

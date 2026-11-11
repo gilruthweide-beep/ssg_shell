@@ -22,11 +22,11 @@ import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * 壳的大脑。进程级单例，不依赖 Flutter 引擎是否活着。
+ * Process-level shell coordinator, independent of the Flutter engine lifetime.
  *
- * 之所以不把这些挂在 `SsgShellPlugin` 上：按 §8.4 体验与性能 2，`ImActivity` 可以是冷启动
- * 的第一个 Activity，那时 Flutter 引擎还没起来；而 §11.2 的存活监测、§11.1 的心跳、
- * §10.4 的网络通知都必须在那一刻就已经在跑。
+ * This state does not belong to `SsgShellPlugin`: §8.4 Performance 2 allows `ImActivity` to be
+ * the first cold-start Activity, before Flutter starts, while §11.2 liveness monitoring, §11.1 heartbeat,
+ * and §10.4 network notifications must already be running.
  */
 internal object ShellCore {
 
@@ -45,10 +45,10 @@ internal object ShellCore {
     )
 
     /**
-     * Dart 侧的回调通道，每个挂了插件的引擎一条。一个都没有时所有 emit 自动跳过。
+     * Dart-side callback channels, one per engine with the plugin attached. When there are none, every emit is skipped.
      *
-     * 不止一条的情况：[ensureDartEngine] 起的无界面引擎之外，宿主的 FlutterActivity
-     * 又自己建了一个。两边都要收到事件，后来的那个销毁时也不能把先来的通道带走。
+     * When there is more than one: besides the headless engine started by [ensureDartEngine], the host's FlutterActivity
+     * created another one itself. Both must receive events, and destroying the later one must not take the earlier channel with it.
      */
     private val dartApis = CopyOnWriteArrayList<SsgShellFlutterApi>()
 
@@ -71,30 +71,30 @@ internal object ShellCore {
     var appInForeground: Boolean = false
         private set
 
-    /** IM 容器（[ImActivity]）是否挂着 WebView 并可见。 */
+    /** Whether the IM container ([ImActivity]) is attached to the WebView and visible. */
     @Volatile
     var imRunning: Boolean = false
         private set
 
-    /** 上一次计算出的「WebView 可见」状态，用于只在翻转时通知 Web。 */
+    /** Last calculated WebView visibility, used to notify the Web application only on changes. */
     private var webVisible: Boolean = false
 
     @Volatile
     private var webReady: Boolean = false
 
     /**
-     * 带状态含义的几条 Web 事件各留最近一条。Dart 上线之前发生的事件它收不到，
-     * 而 `login` 同一 uid 只发一次（§3.1）—— 丢了就不会再绑 OneSignal（§5.2）。
-     * Dart 调 `initialize()` 时由 [replaySticky] 补发。
+     * Keep the latest of each stateful Web event. Dart cannot receive events that happened before it came online,
+     * and `login` is sent only once per uid (§3.1); if lost, OneSignal is never bound (§5.2).
+     * [replaySticky] replays them when Dart calls `initialize()`.
      */
     private var stickyWebReady: WebEvent? = null
-    private var stickyLogin: WebEvent? = null
+    private var stickyIdentity: WebEvent? = null
     private var stickyUnread: WebEvent? = null
     private var stickyChatOpen: WebEvent? = null
 
     /**
-     * 首屏加载失败时没有容器挂着（预加载阶段），重试页没处可盖。
-     * 记下来，容器挂上时补（[onHostAttached]）。
+     * When the initial page fails to load with no container attached (preload phase), there is nowhere to show the retry page.
+     * Record it and apply it when a container attaches ([onHostAttached]).
      */
     private var loadFailed: Boolean = false
     private var loadFailedMessage: String? = null
@@ -102,21 +102,21 @@ internal object ShellCore {
     private var reportedChannelCode: String = ""
     private var lastWebReadyAtMs: Long? = null
 
-    /** §5.3 冷启动点通知时 Web 还没初始化完，参数要暂存，收到 webReady 再调。 */
+    /** §5.3 Queue cold-start notification parameters until the Web application emits webReady. */
     private var pendingOpenChat: OpenChatRequest? = null
 
     @Volatile
     private var injectionOk: Boolean = false
 
-    /** §6.2 收到 `eventLogin` 之后才允许申请通知权限。 */
+    /** §6.2 Allow notification permission requests only after `eventLogin`. */
     @Volatile
     private var loginSeen: Boolean = false
 
     private var started = false
 
-    // -------------------------------------------------------------- 装配
+    // -------------------------------------------------------------- Initialization
 
-    /** 由 [ShellStartupInitializer]（进程启动）或 [SsgShellPlugin] 调，幂等。 */
+    /** Called idempotently by [ShellStartupInitializer] at process startup or by [SsgShellPlugin]. */
     fun attach(context: Context) {
         if (started) return
         started = true
@@ -124,8 +124,8 @@ internal object ShellCore {
         config = ShellConfig.fromDisk(appContext)
         console.capacity = config.consoleBufferSize
 
-        // §4 / §10.2 进程级前后台。不依赖宿主 Activity，Flutter 页和 ImActivity 互切
-        // 不会被误判成回前台。
+        // §4 / §10.2 Track process-level foreground state independently of the host Activity, so switching Flutter pages and ImActivity
+        // does not look like a background-to-foreground transition.
         main.post {
             ProcessLifecycleOwner.get().lifecycle.addObserver(
                 object : DefaultLifecycleObserver {
@@ -135,8 +135,8 @@ internal object ShellCore {
             )
         }
 
-        // §11.4 在 Application 的 onTrimMemory 里判断后直接调用，
-        // 不要经 Flutter 的 didHaveMemoryPressure 转发。
+        // §11.4 Evaluate Application.onTrimMemory directly and forward genuine warnings;
+        // do not route them through Flutter's didHaveMemoryPressure.
         appContext.registerComponentCallbacks(object : ComponentCallbacks2 {
             override fun onTrimMemory(level: Int) = this@ShellCore.onTrimMemory(level)
             override fun onConfigurationChanged(newConfig: Configuration) = Unit
@@ -151,10 +151,10 @@ internal object ShellCore {
             onAvailable = { type -> deliverNetwork(type) },
         ).also { it.start() }
 
-        // §11.7 内核版本引导：低于 92 一次性提示，允许忽略，不要阻断启动。
+        // §11.7 Below engine version 92, show dismissible update guidance once without blocking startup.
         kernelInfo().let { info ->
             if (info.verdict == KernelVerdict.BELOW_MINIMUM) {
-                Log.w(TAG, "WebView 内核 ${info.versionName} 低于 ${config.minKernelVersion}（§8.1 / §11.7）")
+                Log.w(TAG, "WebView engine ${info.versionName} is below ${config.minKernelVersion} (§8.1 / §11.7)")
             }
         }
     }
@@ -168,21 +168,21 @@ internal object ShellCore {
     }
 
     /**
-     * Dart 调 `initialize()` 时补发它上线之前错过的状态类事件，必须在主线程、
-     * 在 `initialize` 返回之前调 —— Dart 那边靠「先到事件、后到返回值」这个顺序接住它们。
+     * When Dart calls `initialize()`, replay the stateful events it missed before coming online. Must be called on the main thread
+     * before `initialize` returns; Dart relies on the "events first, return value second" order to catch them.
      */
     fun replaySticky(api: SsgShellFlutterApi) {
-        listOfNotNull(stickyWebReady, stickyLogin, stickyUnread, stickyChatOpen)
+        listOfNotNull(stickyWebReady, stickyIdentity, stickyUnread, stickyChatOpen)
             .forEach { api.onWebEvent(it) {} }
     }
 
     /**
-     * §5 的 OneSignal 绑定、登录后申请通知权限、通知点击深链都接在 Dart 上（见 README）。
-     * `ImActivity` 当冷启动第一个 Activity 时（§8.4 体验与性能 2）没有 FlutterActivity，
-     * 引擎不会自己起来，这些就全部不跑。这里补一个不带界面的引擎去跑宿主的 `main()`。
+     * §5 OneSignal binding, requesting notification permission after login, and notification-click deep links all live in Dart (see README).
+     * When `ImActivity` is the first Activity on cold start (§8.4 Performance 2) there is no FlutterActivity,
+     * so no engine starts on its own and none of this runs. Start a headless engine here to run the host's `main()`.
      *
-     * 已经有引擎挂着插件时什么都不做。引擎放进 [FlutterEngineCache]，宿主的
-     * FlutterActivity 可以用 [SsgShellPlugin.ENGINE_ID] 复用它，避免 `main()` 跑两遍。
+     * Does nothing when an engine with the plugin attached already exists. The engine goes into [FlutterEngineCache], and the host's
+     * FlutterActivity can reuse it via [SsgShellPlugin.ENGINE_ID] so `main()` does not run twice.
      */
     fun ensureDartEngine() {
         if (dartApis.isNotEmpty() || headlessEngineRequested) return
@@ -191,7 +191,7 @@ internal object ShellCore {
             val loader = FlutterInjector.instance().flutterLoader()
             loader.startInitialization(appContext)
             loader.ensureInitializationCompleteAsync(appContext, null, main) {
-                // 宿主自己预热的引擎抢先到了，就不用再起一个。
+                // The host's own pre-warmed engine got there first; no need to start another.
                 if (dartApis.isNotEmpty()) return@ensureInitializationCompleteAsync
                 runCatching {
                     val engine = FlutterEngine(appContext)
@@ -199,15 +199,15 @@ internal object ShellCore {
                         DartExecutor.DartEntrypoint.createDefault(),
                     )
                     FlutterEngineCache.getInstance().put(SsgShellPlugin.ENGINE_ID, engine)
-                    Log.i(TAG, "没有 Flutter 引擎在跑，已起一个无界面引擎执行 Dart 入口")
+                    Log.i(TAG, "No Flutter engine running; started a headless engine to run the Dart entrypoint")
                 }.onFailure {
                     headlessEngineRequested = false
-                    Log.e(TAG, "无界面 Flutter 引擎启动失败，Dart 侧的推送绑定不会生效", it)
+                    Log.e(TAG, "Headless Flutter engine failed to start; Dart-side push binding will not take effect", it)
                 }
             }
         }.onFailure {
             headlessEngineRequested = false
-            Log.e(TAG, "Flutter 初始化失败，Dart 侧的推送绑定不会生效", it)
+            Log.e(TAG, "Flutter initialization failed; Dart-side push binding will not take effect", it)
         }
     }
 
@@ -222,19 +222,19 @@ internal object ShellCore {
         if (next.entryUrl != config.entryUrl) reportedChannelCode = ""
         config = next
         console.capacity = next.consoleBufferSize
-        // §9.6 落盘，下次冷启动 ImActivity 直接按缓存走，不等 Dart。
+        // §9.6 Persist configuration so ImActivity can use it directly on the next cold start without Dart.
         ShellConfig.persist(appContext, next)
         return ShellInjection.shellInfo(appContext, next.shellVersion)
     }
 
-    /** §8.4 体验与性能 1：B 面开启时提前创建 WebView 并开始加载；未开启时不预加载。 */
+    /** §8.4 Performance 1: preload the WebView only when B side is enabled. */
     fun preload() {
         if (!config.bSideEnabled) {
-            Log.i(TAG, "B 面未开启，跳过 IM 预加载（§8.4 体验与性能 1）")
+            Log.i(TAG, "B side is disabled; skipping IM preload (§8.4 Performance 1)")
             return
         }
         if (config.entryUrl.isBlank()) {
-            Log.w(TAG, "entryUrl 为空，预加载跳过")
+            Log.w(TAG, "entryUrl is empty; skipping preload")
             return
         }
         main.post { ImWebViewHolder.get(appContext, config) }
@@ -244,10 +244,10 @@ internal object ShellCore {
         main.post {
             val intent = Intent(appContext, ImActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                // launchMode=singleTask，已在栈里就复用，不会出现第二个实例（§10.5）。
+                // launchMode=singleTask reuses the existing instance and prevents duplicates (§10.5).
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
             runCatching { appContext.startActivity(intent) }
-                .onFailure { Log.e(TAG, "打开 ImActivity 失败", it) }
+                .onFailure { Log.e(TAG, "Unable to open ImActivity", it) }
         }
     }
 
@@ -263,19 +263,20 @@ internal object ShellCore {
     fun isBSideEnabled(): Boolean = config.bSideEnabled
 
     /**
-     * §5.3 打开会话。
+     * §5.3 Open a conversation.
      *
-     * 等 `eventWebReady` 再调：冷启动点通知时 Web 还没初始化完，需把参数暂存，收到后再调。
-     * 只调一次 —— Web 内部会等会话数据就绪（最长 20 秒）再跳转，不需要原生重试。
+     * Wait for `eventWebReady`: queue notification parameters while the Web application initializes on a cold start.
+     * Deliver once. The Web application waits up to 20 seconds for conversation data; native retries are unnecessary.
      */
     fun openChat(request: OpenChatRequest) {
         if (request.chatId.isBlank()) return
         main.post {
             if (!webReady) {
                 pendingOpenChat = request
+                Log.i(TAG, "openChat queued until WebReady: chatId=${request.chatId}")
                 emit(
                     ShellEventType.DEEP_LINK_QUEUED,
-                    "Web 未就绪，已暂存 chatId=${request.chatId}",
+                    "Web is not ready; queued chatId=${request.chatId}",
                     mapOf("chatId" to request.chatId),
                 )
                 return@post
@@ -286,18 +287,19 @@ internal object ShellCore {
 
     private fun deliverOpenChat(request: OpenChatRequest) {
         val payload = JSONObject().apply {
-            // §5.3 chatId 传字符串。
+            // §5.3 Pass chatId as a string.
             put("chatId", request.chatId)
-            // messageId 传数字或可被 Number() 解析的字符串，可省略。
+            // Optional messageId accepts a number or a string parseable by Number().
             request.messageId?.takeIf { it.isNotBlank() }?.let { raw ->
                 val asNumber = raw.trim().toLongOrNull()
                 if (asNumber != null) put("messageId", asNumber) else put("messageId", raw)
             }
         }
         ImWebViewHolder.callWeb("openChat", payload.toString())
+        Log.i(TAG, "openChat delivered to Web: chatId=${request.chatId}")
         emit(
             ShellEventType.DEEP_LINK_DELIVERED,
-            "已交给 Web：chatId=${request.chatId}",
+            "Delivered to Web: chatId=${request.chatId}",
             buildMap {
                 put("chatId", request.chatId)
                 request.messageId?.let { put("messageId", it) }
@@ -305,20 +307,20 @@ internal object ShellCore {
         )
     }
 
-    /** §5.4 前台抑制 + §11.3 推送捅醒。 */
+    /** §5.4 Foreground suppression and §11.3 push-triggered Web connection wakeup. */
     fun handlePushReceived(message: PushMessage): PushDecision {
         val chatId = message.chatId
         val suppress = gate.shouldSuppress(
             chatId = chatId,
-            appInForeground = appInForeground,
+            appInForeground = appInForeground && imRunning && config.bSideEnabled,
             enabled = config.suppressForegroundNotifications,
         )
 
-        // §11.3 一条消息的推送到达而 App 正在前台，说明这条消息 Web 没有通过长连接收到，
-        // 连接已死。除了按 §5.4 抑制通知，额外调一次 onNetwork 把 Web 捅醒。
+        // §11.3 A foreground push indicates that the Web application missed a message over its persistent connection.
+        // Alongside §5.4 notification suppression, call onNetwork once to wake that connection.
         var nudged = false
         if (appInForeground) {
-            // 推送都到了，网络一定是通的；监听器还没把 VALIDATED 翻过来时按 other 算。
+            // Receiving the push confirms connectivity; use other until the monitor marks the network VALIDATED.
             val observed = network?.currentType ?: NetworkType.NONE
             val type = if (observed == NetworkType.NONE) NetworkType.OTHER else observed
             main.post { deliverNetwork(type) }
@@ -326,11 +328,11 @@ internal object ShellCore {
         }
 
         val reason = buildString {
-            append(if (appInForeground) "前台" else "后台")
-            append("；tracked=").append(gate.trackedChatId ?: "-")
-            append("；incoming=").append(chatId ?: "-")
-            if (suppress) append("；命中前台抑制")
-            if (nudged) append("；已调 onNetwork 捅醒")
+            append(if (appInForeground) "Foreground" else "Background")
+            append("; tracked=").append(gate.trackedChatId ?: "-")
+            append("; incoming=").append(chatId ?: "-")
+            if (suppress) append("; foreground notification suppressed")
+            if (nudged) append("; Web connection nudged through onNetwork")
         }
         Log.i(TAG, "handlePushReceived: $reason")
 
@@ -342,12 +344,13 @@ internal object ShellCore {
         )
     }
 
-    /** §5.3 通知点击。 */
+    /** §5.3 Notification click handling. */
     fun handlePushOpened(message: PushMessage) {
+        Log.i(TAG, "handlePushOpened: chatId=${message.chatId ?: "-"}; webReady=$webReady")
         val chatId = message.chatId?.takeIf { it.isNotBlank() }
         if (config.bSideEnabled) openIm()
         if (chatId == null) {
-            Log.w(TAG, "通知点击里没有 chat_id，只打开 App")
+            Log.w(TAG, "Notification click has no chat_id; opening the application only")
             return
         }
         openChat(OpenChatRequest(chatId = chatId, messageId = message.messageId))
@@ -359,22 +362,22 @@ internal object ShellCore {
 
     fun reloadWeb() {
         main.post {
-            Log.i(TAG, "手动 reload（§11.2）")
+            Log.i(TAG, "Manual reload (§11.2)")
             ImWebViewHolder.reload()
         }
     }
 
     fun recreateWebView() {
         main.post {
-            // §11.2.3 **必须先结束渲染进程再重建。** 同一个 App 的所有 WebView 共用一个
-            // 渲染进程，死循环卡住的是这个进程；只换 WebView 实例的话新实例同样卡住。
+            // §11.2.3 **Terminate the renderer before recreation.** All WebViews in one Android application share a renderer;
+            // replacing only the view would attach the replacement to the same process blocked by the infinite loop.
             if (ImWebViewHolder.terminateRenderProcess()) {
-                // terminate 会触发 §7.1 的 onRenderProcessGone，重建在那条路径上统一完成，
-                // 避免同时存在两个实例（§10.5）。
-                Log.i(TAG, "已结束渲染进程，等 onRenderProcessGone 重建")
+                // Termination triggers §7.1 onRenderProcessGone, which owns recreation,
+                // preventing duplicate WebView instances (§10.5).
+                Log.i(TAG, "Renderer terminated; waiting for onRenderProcessGone to recreate the WebView")
                 return@post
             }
-            Log.w(TAG, "渲染进程未能结束，直接换 WebView 实例（旧内核兜底，§11.2.3）")
+            Log.w(TAG, "Renderer could not be terminated; replacing the WebView directly (legacy-engine fallback, §11.2.3)")
             doRecreate()
         }
     }
@@ -384,7 +387,7 @@ internal object ShellCore {
         gate.onPageLoadStarted()
         ImWebViewHolder.recreate(appContext, config)
         watchdog.onWebViewRecreated()
-        emit(ShellEventType.WEB_VIEW_RECREATED, "WebView 实例已重建", emptyMap())
+        emit(ShellEventType.WEB_VIEW_RECREATED, "WebView instance recreated", emptyMap())
     }
 
     fun setBadgeCount(count: Int) {
@@ -393,7 +396,7 @@ internal object ShellCore {
     }
 
     fun verifyInjection(onResult: (Boolean) -> Unit) {
-        // §1.3 这是 Web 侧的判定结果。只要它是 true，无论 __SSG_SHELL__ 打印出什么都算失败。
+        // §1.3 Use the Web application's own verdict. A true result fails regardless of the contents of __SSG_SHELL__.
         val js = "document.documentElement.classList.contains('is-web-browser')"
         main.post {
             ImWebViewHolder.evaluate(js) { raw ->
@@ -402,7 +405,7 @@ internal object ShellCore {
                 injectionOk = ok
                 emit(
                     ShellEventType.INJECTION_CHECKED,
-                    if (ok) "注入生效" else "注入未生效（is-web-browser=$isBrowser），见 §1.2",
+                    if (ok) "Injection active" else "Injection failed (is-web-browser=$isBrowser); see §1.2",
                     mapOf("isWebBrowser" to (isBrowser ?: "null")),
                 )
                 onResult(ok)
@@ -411,13 +414,13 @@ internal object ShellCore {
     }
 
     fun evaluateJavaScript(script: String, onResult: (Result<String>) -> Unit) {
-        // §8.3 存储不要清。清存储的后果：用户被登出、本地消息缓存全失、媒体重新下载一遍、
-        // 诊断上下文丢失，并且 eventRegister 的「每设备一次」标记被抹掉，渠道注册数虚高。
+        // §8.3 Preserve storage. Clearing it logs users out, removes cached messages, downloads media again,
+        // loses diagnostic context, and resets the once-per-device eventRegister marker, inflating attribution counts.
         FORBIDDEN_JS.firstOrNull { script.contains(it, ignoreCase = true) }?.let { hit ->
             onResult(
                 Result.failure(
                     IllegalArgumentException(
-                        "脚本包含禁止的存储清理调用「$hit」，见 §8.3。只能由用户显式「清除数据」触发。",
+                        "Script contains prohibited storage deletion call $hit; see §8.3. Deletion requires an explicit user action to clear data.",
                     ),
                 ),
             )
@@ -428,7 +431,7 @@ internal object ShellCore {
         }
     }
 
-    // ------------------------------------------------------------ 诊断
+    // ------------------------------------------------------------ Diagnostics
 
     fun kernelInfo(): KernelInfo {
         val versionName = ShellInjection.webViewVersionName(appContext)
@@ -467,48 +470,48 @@ internal object ShellCore {
         trackedChatId = gate.trackedChatId,
     )
 
-    /** §11.6 导出：当前 URL、UA、内核版本、`__SSG_SHELL__`、最近一次 reload 时间、最近 N 条 console。 */
+    /** §11.6 Export URL, user agent, engine version, __SSG_SHELL__, last reload time, and recent console entries. */
     fun exportDiagnostics(): String {
         val d = diagnostics()
         val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT)
         fun time(ms: Long?) = ms?.let { fmt.format(Date(it)) } ?: "-"
         return buildString {
-            appendLine("==== SSG Shell 诊断 ====")
-            appendLine("导出时间        ${fmt.format(Date())}")
-            appendLine("平台            android")
-            appendLine("包名            ${d.shellInfo.bundleId}")
-            appendLine("壳版本          ${d.shellInfo.shellVersion}")
-            appendLine("机型            ${d.shellInfo.deviceModel}")
-            appendLine("系统版本        ${d.shellInfo.osVersion}")
-            appendLine("内核版本        ${d.kernel.versionName} (${d.kernel.verdict}) ${d.kernel.packageName}")
-            appendLine("入口地址        ${d.entryUrl}")
-            appendLine("当前地址        ${d.currentUrl}")
+            appendLine("==== SSG Shell diagnostics ====")
+            appendLine("Exported at        ${fmt.format(Date())}")
+            appendLine("Platform            android")
+            appendLine("Bundle ID            ${d.shellInfo.bundleId}")
+            appendLine("Shell version          ${d.shellInfo.shellVersion}")
+            appendLine("Device model            ${d.shellInfo.deviceModel}")
+            appendLine("OS version        ${d.shellInfo.osVersion}")
+            appendLine("Engine version        ${d.kernel.versionName} (${d.kernel.verdict}) ${d.kernel.packageName}")
+            appendLine("Landing URL        ${d.entryUrl}")
+            appendLine("Current URL        ${d.currentUrl}")
             appendLine("UA              ${d.userAgent}")
-            appendLine("channelCode     ${d.channelCode.ifEmpty { "(未提供，可选；以 Web 归因事件为准)" }}")
-            appendLine("注入自检        ${if (d.injectionOk) "通过 shellSrc:inject" else "未通过，见 §1.2"}")
-            appendLine("IM 挂载         ${d.imRunning}")
-            appendLine("App 前台        ${d.appInForeground}")
-            appendLine("最近 webReady   ${time(d.lastWebReadyAtMs)}")
-            appendLine("最近 webAlive   ${time(d.lastWebAliveAtMs)}")
-            appendLine("最近 reload     ${time(d.lastReloadAtMs)}  次数 ${d.reloadCount}")
-            appendLine("WebView 重建    ${d.recreateCount} 次")
-            appendLine("当前会话        ${d.trackedChatId ?: "-"}")
-            appendLine("角标            ${d.badgeCount}")
+            appendLine("channelCode     ${d.channelCode.ifEmpty { "(optional; not supplied by Web attribution events)" }}")
+            appendLine("Injection check        ${if (d.injectionOk) "Passed shellSrc:inject" else "Failed; see §1.2"}")
+            appendLine("IM attached         ${d.imRunning}")
+            appendLine("App foreground        ${d.appInForeground}")
+            appendLine("Last webReady   ${time(d.lastWebReadyAtMs)}")
+            appendLine("Last webAlive   ${time(d.lastWebAliveAtMs)}")
+            appendLine("Last reload     ${time(d.lastReloadAtMs)}  Count ${d.reloadCount}")
+            appendLine("WebView recreations    ${d.recreateCount} times")
+            appendLine("Active chat        ${d.trackedChatId ?: "-"}")
+            appendLine("Badge            ${d.badgeCount}")
             appendLine()
-            appendLine("---- 最近 ${d.consoleTail.size} 条 console ----")
+            appendLine("---- Last ${d.consoleTail.size} console entries ----")
             appendLine(console.dump())
         }
     }
 
-    // ------------------------------------------------- WebView 回调入口
+    // ------------------------------------------------- WebView callbacks
 
-    /** §3.1 从 [JsBridge] 过来，可能在 JS 线程上，必须切主线程。 */
+    /** §3.1 Events from [JsBridge] may arrive on the JavaScript thread; dispatch to the main thread. */
     fun onWebEvent(event: WebEvent) {
         main.post { handleWebEvent(event) }
     }
 
     private fun handleWebEvent(event: WebEvent) {
-        // §2.1 渠道取值由 Web 负责，诊断只记录归因事件，不读取或改写 URL。
+        // §2.1 The Web application owns channel attribution; diagnostics record events without reading or rewriting the URL.
         if (event.name == WebEventName.REGISTER || event.name == WebEventName.LOGIN ||
             event.name == WebEventName.MESSAGE_SENT) {
             reportedChannelCode = event.params["channelCode"].orEmpty()
@@ -518,14 +521,14 @@ internal object ShellCore {
                 webReady = true
                 stickyWebReady = event
                 lastWebReadyAtMs = event.receivedAtMs
-                // §9.6 收到 eventWebReady 后立即撤 splash，不要用固定时长定时器。
+                // §9.6 Remove the splash immediately after eventWebReady rather than waiting a fixed duration.
                 ImWebViewHolder.host?.dismissSplash(ShellEventType.SPLASH_DISMISSED)
-                // §5.3 冷启动点通知时暂存的参数，就绪后补发，只调一次。
+                // §5.3 Deliver queued cold-start notification parameters once after readiness.
                 pendingOpenChat?.let { queued ->
                     pendingOpenChat = null
                     deliverOpenChat(queued)
                 }
-                // §1.3 首屏可见即可自检，不用等人去连调试器。
+                // §1.3 Run the injection check when the first screen is visible without requiring a debugger.
                 verifyInjection {}
             }
 
@@ -545,28 +548,32 @@ internal object ShellCore {
                 stickyUnread = event
                 val count = (event.unreadCount ?: 0L).toInt()
                 gate.onUnreadCount(count)
-                // §5.4 角标数 = Web 给的未读总数，count 为 0 时清零。
+                // §5.4 Badge count equals the Web unread total; a count of zero clears it.
                 if (config.manageBadge) BadgeApplier.apply(appContext, count)
             }
 
-            // §6.2 通知权限在收到 eventLogin 之后才允许申请，这里只放开闸门，
-            // 真正弹窗由 Dart 侧决定时机（宿主可能要先做自己的引导页）。
-            WebEventName.LOGIN -> {
+            // §6.2 Open the notification permission gate only after eventLogin;
+            // Dart controls the actual prompt timing so the host can show its own introduction first.
+            // An empty uid is not a login: it must not unlock the prompt or bind OneSignal.
+            WebEventName.LOGIN -> if (!event.uid.isNullOrBlank()) {
                 loginSeen = true
-                stickyLogin = event
+                stickyIdentity = event
             }
 
             WebEventName.LOGOUT -> {
                 loginSeen = false
-                stickyLogin = null
+                // Local patch: keep the logout as the latest identity. A logout that happens
+                // before Dart starts must still reach OneSignal.logout(); otherwise the device
+                // keeps receiving the previous account's pushes.
+                stickyIdentity = event
                 stickyChatOpen = null
-                // §5.4 退出登录时 Web 会发 unreadCount=0，这里不额外清，交给那条事件。
+                // §5.4 The Web application emits unreadCount=0 on logout; let that event clear the badge.
             }
 
             else -> Unit
         }
 
-        dartApis.forEach { api -> api.onWebEvent(event) { /* Dart 侧没挂监听不是错误 */ } }
+        dartApis.forEach { api -> api.onWebEvent(event) { /* Missing Dart listeners are not errors. */ } }
     }
 
     fun hasLoggedIn(): Boolean = loginSeen
@@ -574,16 +581,16 @@ internal object ShellCore {
     fun isWebReady(): Boolean = webReady
 
     /**
-     * 容器挂上来时补上它错过的状态。
+     * When a container attaches, apply the state it missed.
      *
-     * `eventWebReady` 每次页面加载只发一次，预加载期间发过就不会再来 —— splash 的那一半
-     * 由容器自己读 [isWebReady] 决定；这里补首屏加载失败的重试页（§9.6）。
+     * `eventWebReady` fires only once per page load and will not come again if sent during preload; the splash half
+     * is decided by the container reading [isWebReady] itself; this handles the retry page for an initial page load failure (§9.6).
      */
     fun onHostAttached(host: ShellWebViewHost) {
         if (loadFailed) host.showErrorPage(loadFailedMessage)
     }
 
-    /** 页面要重新加载了（reload、重建）：上一个页面留下的状态全部作废。 */
+    /** The page is about to reload (reload, recreation): all state left by the previous page is discarded. */
     private fun onPageReset() {
         webReady = false
         stickyWebReady = null
@@ -593,7 +600,7 @@ internal object ShellCore {
     }
 
     fun onPageStarted(url: String?) {
-        // §5.4 页面重新加载时不会发 chatClose，原生在页面开始加载时要清空记住的 chatId。
+        // §5.4 Page reloads do not emit chatClose; clear the tracked chatId when loading starts.
         gate.onPageLoadStarted()
         onPageReset()
         watchdog.onPageStarted()
@@ -607,7 +614,7 @@ internal object ShellCore {
     }
 
     fun onMainFrameLoadFailed(url: String, description: String) {
-        Log.w(TAG, "首屏加载失败 $url: $description")
+        Log.w(TAG, "Initial page load failed $url: $description")
         main.post {
             loadFailed = true
             loadFailedMessage = null
@@ -624,7 +631,7 @@ internal object ShellCore {
             ImWebViewHolder.host?.showErrorPage(message)
             emit(
                 ShellEventType.LOAD_FAILED,
-                "SSL 校验失败（primaryError=$primaryError）",
+                "SSL validation failed (primaryError=$primaryError)",
                 mapOf("sslError" to primaryError.toString()),
             )
         }
@@ -634,10 +641,10 @@ internal object ShellCore {
         main.post {
             emit(
                 ShellEventType.RENDER_PROCESS_GONE,
-                if (crashed) "渲染进程崩溃" else "渲染进程被回收或主动结束",
+                if (crashed) "Renderer crashed" else "Renderer reclaimed or explicitly terminated",
                 mapOf("didCrash" to crashed.toString()),
             )
-            // §7.1 旧实例已不可用，不能对它 reload：销毁旧 WebView、新建一个加载入口地址。
+            // §7.1 The old WebView is unusable; destroy it and load the landing URL in a new instance instead of reloading it.
             doRecreate()
         }
     }
@@ -652,7 +659,7 @@ internal object ShellCore {
             line = line,
         )
         console.add(record)
-        // §11.6 把 Web 的 console 落到原生日志。
+        // §11.6 Forward Web console output to native logs.
         val tag = "SsgShellWeb"
         when (level) {
             ConsoleLevel.ERROR -> Log.e(tag, message)
@@ -671,11 +678,11 @@ internal object ShellCore {
     }
 
     /**
-     * §11.4 内存告警。
+     * §11.4 Memory warning.
      *
-     * 只在 `TRIM_MEMORY_RUNNING_LOW` 或 `TRIM_MEMORY_RUNNING_CRITICAL` 时调。
-     * **不要写成 `level >= TRIM_MEMORY_RUNNING_LOW`**：切后台时系统必发
-     * `TRIM_MEMORY_UI_HIDDEN`（值 20，比 `RUNNING_LOW` 的 10 大），会被误当成内存告警。
+     * Invoke only for `TRIM_MEMORY_RUNNING_LOW` or `TRIM_MEMORY_RUNNING_CRITICAL`.
+     * **Do not use `level >= TRIM_MEMORY_RUNNING_LOW`**: background entry always emits
+     * `TRIM_MEMORY_UI_HIDDEN` (20), which exceeds `RUNNING_LOW` (10) but is not a memory warning.
      */
     fun onTrimMemory(level: Int) {
         if (level != ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW &&
@@ -693,7 +700,7 @@ internal object ShellCore {
         }
     }
 
-    // ------------------------------------------------------- 生命周期
+    // ------------------------------------------------------- Lifecycle
 
     private fun setAppForeground(foreground: Boolean) {
         if (appInForeground == foreground) return
@@ -713,28 +720,28 @@ internal object ShellCore {
     }
 
     /**
-     * §10.2 回前台信号。
+     * §10.2 Foreground signaling.
      *
-     * 判据是「WebView 真的可见」而不是「App 在前台」：IM 页和 Flutter 的 A 面互切时
-     * App 一直在前台，但 WebView 已经 `onPause()`，Web 的 `document.hidden` 翻成 true、
-     * 停发 `eventWebAlive`。这时如果 §11.2 的计时还在跑，60 秒后会误判卡死。
+     * Use actual WebView visibility rather than application foreground state. Switching IM and Flutter A side
+     * keeps the application in the foreground while the WebView has called `onPause()` and `document.hidden` is true,
+     * and eventWebAlive stops. Keeping §11.2 timing active would falsely detect a timeout after 60 seconds.
      */
     private fun updateWebVisibility() {
         val visible = appInForeground && imRunning
         if (visible == webVisible) return
         webVisible = visible
         if (visible) {
-            // §10.2.2 先 onResume()：让 document.hidden 翻转，visibilitychange 成为
-            // 独立于注入的第二条通道。
+            // §10.2.2 Call onResume() first to update document.hidden and let visibilitychange provide
+            // a second foreground signal independent of injection.
             ImWebViewHolder.onResumeWeb()
-            // §10.2.1 每次回前台都调 onForeground()。锁屏解锁、从后台任务切回、
-            // 从通知点进来都算。注入生效后，后台停留超过 1.5 秒回前台即立刻重连。
+            // §10.2.1 Call onForeground() on every foreground transition, including unlocks, returning from background tasks,
+            // and notification clicks. With injection active, returning after more than 1.5 seconds reconnects immediately.
             ImWebViewHolder.callWeb("onForeground")
             watchdog.onForeground()
             emit(ShellEventType.FOREGROUND, null, emptyMap())
         } else {
             ImWebViewHolder.callWeb("onBackground")
-            // §10.3 只调 onPause()（暂停渲染和可见性），不调 pauseTimers()。
+            // §10.3 Call onPause() to pause rendering and visibility, but preserve timers by avoiding pauseTimers().
             ImWebViewHolder.onPauseWeb()
             watchdog.onBackground()
             emit(ShellEventType.BACKGROUND, null, emptyMap())
@@ -742,7 +749,7 @@ internal object ShellCore {
     }
 
     private fun deliverNetwork(type: NetworkType) {
-        // §4 断网时不用调，传 none 会被忽略。
+        // §4 Do not report disconnection; none would be ignored.
         if (type == NetworkType.NONE) return
         val wire = when (type) {
             NetworkType.WIFI -> "wifi"
@@ -756,7 +763,7 @@ internal object ShellCore {
 
     fun currentNetworkType(): NetworkType = network?.currentType ?: NetworkType.NONE
 
-    // ------------------------------------------------------------ 杂项
+    // ------------------------------------------------------------ Utilities
 
     private fun emit(
         type: ShellEventType,
@@ -782,11 +789,11 @@ internal object ShellCore {
         emit(reason, null, emptyMap())
     }
 
-    /** 给 [ImActivity] 用：取 A 面 Activity，B 面未开启时转过去并结束自己（§8.4 体验与性能 2）。 */
+    /** For [ImActivity]: resolve the A-side Activity to redirect and finish when B side is disabled (§8.4 Performance 2). */
     fun aSideIntent(): Intent? {
         val name = ShellConfig.aSideActivity(appContext) ?: return null
         val clazz = runCatching { Class.forName(name) }.getOrNull() ?: run {
-            Log.e(TAG, "meta-data ${ShellConfig.META_A_SIDE_ACTIVITY} 指向的类不存在：$name")
+            Log.e(TAG, "Metadata ${ShellConfig.META_A_SIDE_ACTIVITY} refers to a missing class: $name")
             return null
         }
         @Suppress("UNCHECKED_CAST")
@@ -794,10 +801,10 @@ internal object ShellCore {
     }
 
     /**
-     * §8.3 不允许出现在任何常规路径上的调用。
+     * §8.3 Calls prohibited on normal execution paths.
      *
-     * 只拦「清」，不拦「读」：§12.1 的自测要跑
-     * `await navigator.serviceWorker.getRegistration()`，那是读，必须放行。
+     * Block deletion but allow reads: the §12.1 self-test uses
+     * `await navigator.serviceWorker.getRegistration()`, which must remain available.
      */
     private val FORBIDDEN_JS = listOf(
         "caches.delete",

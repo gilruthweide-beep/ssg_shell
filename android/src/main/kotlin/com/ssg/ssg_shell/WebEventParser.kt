@@ -3,19 +3,19 @@ package com.ssg.ssg_shell
 import org.json.JSONObject
 
 /**
- * §3.1 的 payload 解析。
+ * §3.1 Payload parsing.
  *
- * 线上实际能收到三种形状，都要吃下去：
- *  - `{"eventName":"login","params":{...}}`（规范示例）
- *  - 只有 `params` 内容、事件名靠 handler 名推断（`postMessage("eventLogin", "{...}")`）
- *  - 整个 payload 就是 params 本身
+ * Accept all three payload shapes observed in production:
+ *  - `{"eventName":"login","params":{...}}` (the specification example).
+ *  - Parameter contents only, with the event inferred from the handler (`postMessage("eventLogin", "{...}")`).
+ *  - The entire payload is the params object.
  *
- * params 里的值规范说全是字符串，但不保证：Web 发 `count` 时可能是数字。
- * 所以统一用 `optString` 取，数字也能拿到十进制文本。
+ * Although the specification requires string parameters, the Web application may send count as a number.
+ * Use `optString` consistently to obtain decimal text for numeric values too.
  */
 internal object WebEventParser {
 
-    /** handler 名 → 事件名。`eventWebReady` → `webReady`。 */
+    /** Map handler names to event names, for example eventWebReady → webReady. */
     fun handlerToEventName(handler: String): String {
         if (!handler.startsWith("event") || handler.length <= "event".length) return handler
         val rest = handler.substring("event".length)
@@ -37,8 +37,8 @@ internal object WebEventParser {
     }
 
     /**
-     * @param handlerName iOS 的 message handler 名或 Android 两参版本的第一个参数；
-     *                    单参版本传 null，事件名只能从 payload 里取。
+     * @param handlerName The iOS message handler name or first argument of Android's two-argument overload;
+     *                    pass null for the one-argument overload, which must infer the event from the payload.
      */
     fun parse(handlerName: String?, payload: String?): WebEvent? {
         val json = payload?.let { runCatching { JSONObject(it) }.getOrNull() }
@@ -49,7 +49,7 @@ internal object WebEventParser {
             else -> return null
         }
 
-        // params 可能在 "params" 下，也可能就是顶层对象。
+        // Parameters may be nested under "params" or supplied directly at the top level.
         val params = json?.optJSONObject("params") ?: json
         val flat = LinkedHashMap<String, String>()
         params?.keys()?.forEach { key ->

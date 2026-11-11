@@ -1,11 +1,11 @@
 import Foundation
 import WebKit
 
-/// §3.2 Web → Native 的收口。
+/// §3.2 Web → Native entry point.
 ///
-/// Web 调 `window.webkit.messageHandlers.<handler>.postMessage(payload)`，payload 是 JS
-/// 对象（原生侧为 `NSDictionary`），不是 JSON 字符串。§3.1 的十个 handler 必须全注册 ——
-/// 未注册的会抛异常，Web 已捕获但事件会丢。
+/// The Web application calls window.webkit.messageHandlers.<handler>.postMessage(payload) with a JavaScript
+/// The payload is an object (NSDictionary natively), not a JSON string. Register all ten §3.1 handlers;
+/// missing handlers throw errors caught by the Web application, but events are lost.
 final class ScriptMessageRouter: NSObject, WKScriptMessageHandler, WKScriptMessageHandlerWithReply {
 
   private let filePicker: FilePickerBridge
@@ -27,36 +27,36 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandler, WKScriptMessa
       handleFilePick(message.body)
 
     default:
-      // §3.1 的十个事件。
+      // All ten §3.1 events.
       guard let event = WebEventParser.parse(handlerName: message.name, body: message.body) else {
-        NSLog("[SsgShell] 解析不出事件：\(message.name)")
+        NSLog("[SsgShell] Unable to parse event:\(message.name)")
         return
       }
       ShellCore.shared.onWebEvent(event)
     }
   }
 
-  /// §7.3.4 页面逐块来拉文件内容。带回复的 handler 在页面侧就是一个 Promise。
+  /// §7.3.4 The page requests file contents by chunk. A reply-capable handler becomes a page-side Promise.
   func userContentController(
     _ userContentController: WKUserContentController,
     didReceive message: WKScriptMessage,
     replyHandler: @escaping (Any?, String?) -> Void
   ) {
     guard message.name == ShellInjection.fileChunkHandler else {
-      replyHandler(nil, "未知的 handler：\(message.name)")
+      replyHandler(nil, "Unknown handler:\(message.name)")
       return
     }
     guard let body = message.body as? [String: Any],
           let token = body["token"] as? String,
           let index = (body["index"] as? NSNumber)?.intValue
     else {
-      replyHandler(nil, "参数不对，要 { token, index }")
+      replyHandler(nil, "Invalid arguments; expected { token, index }")
       return
     }
-    // 读文件别占主线程：大视频一块 1.4 MB，连着拉几百块会卡住界面。
+    // Read files off the main thread; hundreds of consecutive 1.4 MB video chunks would block the UI.
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       guard let self else {
-        replyHandler(nil, "壳已销毁")
+        replyHandler(nil, "Shell has been destroyed")
         return
       }
       do {
@@ -68,7 +68,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandler, WKScriptMessa
     }
   }
 
-  // --------------------------------------------------------------- 分支实现
+  // --------------------------------------------------------------- Event handling
 
   private func handleConsole(_ body: Any?) {
     guard let dict = body as? [String: Any] else { return }
@@ -88,7 +88,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandler, WKScriptMessa
     guard let dict = body as? [String: Any],
           let requestId = dict["requestId"] as? String
     else {
-      NSLog("[SsgShell] 文件选择请求缺 requestId")
+      NSLog("[SsgShell] File selection request is missing requestId")
       return
     }
     filePicker.present(

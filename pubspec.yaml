@@ -1,5 +1,5 @@
 name: ssg_shell
-description: "马甲包原生壳：WebView 容器注入、事件通道、OneSignal 深链、假死防护。接口由 Pigeon 生成，Android / iOS 行为一致。"
+description: "Native IM shell with WebView injection, event bridging, OneSignal deep links, and liveness recovery. Shared Pigeon interfaces for Android and iOS."
 version: 1.0.2
 homepage: https://example.com/ssg-shell
 publish_to: none

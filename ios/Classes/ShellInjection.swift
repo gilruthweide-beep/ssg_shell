@@ -2,36 +2,36 @@ import Foundation
 import UIKit
 import WebKit
 
-/// §1.1 / §1.2 / §2.2 / §7.3 / §11.6：所有注入进页面的东西都在这里。
+/// §1.1 / §1.2 / §2.2 / §7.3 / §11.6: all scripts and fields injected into the page.
 enum ShellInjection {
 
-  // ------------------------------------------------------- message handler 名
+  // ------------------------------------------------------- Message handler names
 
-  /// §3.2 十个 handler 全部注册，未注册的会抛异常，Web 已捕获但事件会丢。
+  /// §3.2 Register all ten handlers; missing handlers throw errors caught by Web code, but lose events.
   static let eventHandlers = [
     "eventWebReady", "eventRegister", "eventLogin", "eventLogout",
     "eventMessageSent", "eventWebAlive",
     "eventChatOpen", "eventChatClose", "eventChatRead", "eventUnreadCount",
   ]
 
-  /// §11.6 console 转发。WKWebView 没有 `onConsoleMessage`，只能注入钩子。
+  /// §11.6 Console forwarding. WKWebView has no onConsoleMessage callback, so inject a hook.
   static let consoleHandler = "shellConsole"
-  /// §7.3.1 文件输入框被拦下来之后通知原生。
+  /// §7.3.1 Notify native code after intercepting a file input.
   static let filePickHandler = "shellFilePick"
-  /// §7.3.4 页面分块来拉文件内容（`WKScriptMessageHandlerWithReply`）。
+  /// §7.3.4 The page fetches file chunks through WKScriptMessageHandlerWithReply.
   static let fileChunkHandler = "shellFileChunk"
 
-  // -------------------------------------------------------------- §1.1 字段
+  // -------------------------------------------------------------- §1.1 Fields
 
-  /// §1.1 六个必填字段。缺 `platform` 视为注入无效，缺 `bundleId` 收不到推送。
+  /// §1.1 Six required fields. Missing platform invalidates injection; missing bundleId prevents push routing.
   static func shellInfo(shellVersion: String) -> ShellInfo {
     ShellInfo(
       platform: .ios,
       bundleId: Bundle.main.bundleIdentifier ?? "",
       shellVersion: shellVersion,
       webviewVersion: webKitVersion(),
-      // §11.5 机型用原始标识符（iPhone15,2）：假死集中在特定机型上，
-      // 营销名反而对不上号。
+      // §11.5 Use the original model identifier (such as iPhone15,2) to diagnose device-specific connection freezes;
+      // marketing names are less precise for this purpose.
       deviceModel: deviceModel(),
       osVersion: UIDevice.current.systemVersion
     )
@@ -46,7 +46,7 @@ enum ShellInjection {
     return raw.isEmpty ? "iOS" : raw
   }
 
-  /// WebKit 随系统升级，不能单独更新，所以这个值只进诊断埋点（§1.1 / §11.5）。
+  /// WebKit updates with iOS and cannot be updated independently; this value is diagnostic only (§1.1 / §11.5).
   static func webKitVersion() -> String {
     let bundle = Bundle(identifier: "com.apple.WebKit")
       ?? Bundle(path: "/System/Library/Frameworks/WebKit.framework")
@@ -56,18 +56,18 @@ enum ShellInjection {
     return ""
   }
 
-  /// §2.2 UA：`config.applicationNameForUserAgent`，WebKit 会把它**追加**在默认 UA 后面。
+  /// §2.2 config.applicationNameForUserAgent is appended by WebKit to the default user agent.
   ///
-  /// 不要整段替换 `customUserAgent` —— Web 与服务端都有按 UA 判平台的逻辑
-  /// （`Android`、`iPhone`、`iPad`），替换会让平台识别全面失效。
+  /// Do not replace customUserAgent; both the Web application and server use it to identify the platform.
+  /// from tokens such as `Android`, `iPhone`, and `iPad`, which a replacement agent could remove.
   static func applicationNameForUserAgent(shellVersion: String) -> String {
     "SSGShell/\(shellVersion) iOS"
   }
 
-  // -------------------------------------------------------------- §1.2 注入
+  // -------------------------------------------------------------- §1.2 Injection
 
-  /// §1.2 必须在页面任何脚本执行之前完成：Web 侧有一组常量在模块加载那一刻求值
-  /// （容器判定、重连参数、装机卡片开关），晚于首个 bundle 即无效。
+  /// §1.2 Inject before any page script executes. The Web application evaluates constants at module load
+  /// for container detection, reconnection settings, and install-card visibility; injection after the first bundle is too late.
   static func injectionScript(_ info: ShellInfo) -> String {
     let fields = [
       "platform:'\(escape("ios"))'",
@@ -89,12 +89,12 @@ enum ShellInjection {
       .replacingOccurrences(of: "<", with: "\\u003c")
   }
 
-  // ------------------------------------------------------- §11.6 console 转发
+  // ------------------------------------------------------- §11.6 Console forwarding
 
-  /// 包一层 console，原实现照常调用。
+  /// Wrap console methods while continuing to call their original implementations.
   ///
-  /// §9.6：注入调试工具时不要覆盖 `window` 上的现有字段 —— 这里只加
-  /// `__ssgConsoleHooked` 一个标记，`__ssgShell` 和业务字段一个都不碰。
+  /// §9.6 Debug injection must preserve existing window fields. Add only
+  /// the __ssgConsoleHooked marker, leaving __ssgShell and business fields untouched.
   static let consoleScript = """
   (function () {
     if (window.__ssgConsoleHooked) { return; }
@@ -143,17 +143,17 @@ enum ShellInjection {
   })();
   """.replacingOccurrences(of: "__CONSOLE__", with: consoleHandler)
 
-  // --------------------------------------------------------- §7.3 文件选择器
+  // --------------------------------------------------------- §7.3 File selection
 
-  /// §7.3 iOS 必须由壳接管 `<input type="file">`。
+  /// §7.3 The iOS shell must handle <input type="file"> itself.
   ///
-  /// WKWebView 自带的处理会先弹「照片图库 / 拍照或录像 / 选取文件」菜单，且没有公开接口
-  /// 去掉，所以这里在 document-start 把弹出路径全拦下来（用户点击、`click()`、
-  /// `showPicker()`），交给原生的 `PHPickerViewController`。只用公开 API，不 hook
-  /// WebKit 私有类（§7.3 明确禁止 `WKFileUploadPanel` 之类的做法）。
+  /// WKWebView normally shows an intermediate photo library / camera / file menu with no public API to remove it.
+  /// At document start, intercept every path that opens the picker: user clicks, click(),
+  /// and showPicker(). Delegate them to PHPickerViewController using public APIs only;
+  /// private WebKit hooks such as WKFileUploadPanel are prohibited by §7.3.
   ///
-  /// 文件交回页面走分块：视频可能几百 MB，整个转 base64 一次性交给页面会直接 OOM
-  /// （§7.3.4）。页面按块向 `shellFileChunk` 拉，每块 base64 后不超过 2 MB。
+  /// Deliver files in chunks: converting hundreds of MB of video to base64 at once could exhaust memory
+  /// (§7.3.4). The page requests shellFileChunk chunks, each below 2 MB after encoding.
   static let fileInputScript = """
   (function () {
     if (window.__ssgFileBridge) { return; }
@@ -181,8 +181,8 @@ enum ShellInjection {
       return ok;
     }
 
-    // 用户直接点击。捕获阶段 preventDefault 掉，WebKit 就不会弹它自己的菜单；
-    // 页面自己的 click 处理照常跑，不用 stopPropagation。
+    // For user clicks, preventDefault during capture to suppress WebKit's menu;
+    // allow the page's click handlers to run normally without stopPropagation.
     document.addEventListener('click', function (e) {
       var node = e.target;
       if (!node || typeof node.closest !== 'function') { return; }
@@ -191,7 +191,7 @@ enum ShellInjection {
       if (intercept(input)) { e.preventDefault(); }
     }, true);
 
-    // 程序触发：input.click()
+    // Programmatic input.click() calls.
     var nativeClick = HTMLElement.prototype.click;
     HTMLElement.prototype.click = function () {
       if (this instanceof HTMLInputElement && this.type === 'file' && !this.disabled) {
@@ -200,7 +200,7 @@ enum ShellInjection {
       return nativeClick.apply(this, arguments);
     };
 
-    // 程序触发：input.showPicker()
+    // Programmatic input.showPicker() calls.
     if (HTMLInputElement.prototype.showPicker) {
       var nativeShowPicker = HTMLInputElement.prototype.showPicker;
       HTMLInputElement.prototype.showPicker = function () {
@@ -237,8 +237,8 @@ enum ShellInjection {
     }
 
     window.__ssgFileBridge = {
-      // 原生选完之后调这个。files 为空 = 用户取消：§7.3.5 不派发事件，
-      // 下一次点附件要能再次拉起（pending 已经清掉了）。
+      // Called after native selection. An empty files array means cancellation: do not dispatch events (§7.3.5),
+      // and clear pending state so the next attachment tap can work again.
       deliver: function (requestId, files) {
         var input = pending[requestId];
         delete pending[requestId];
@@ -250,7 +250,7 @@ enum ShellInjection {
             var dt = new DataTransfer();
             built.forEach(function (f) { dt.items.add(f); });
             input.files = dt.files;
-            // §7.3.4 Web 以这两个事件为准取文件，不需要改动页面。
+            // §7.3.4 The Web application uses these two events to read files; no page changes are required.
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
             return;
@@ -261,7 +261,7 @@ enum ShellInjection {
             step();
           }).catch(function (e) {
             if (window.console && console.error) {
-              console.error('[ssg_shell] 交回文件失败', e);
+              console.error('[ssg_shell] Unable to deliver selected files', e);
             }
           });
         }

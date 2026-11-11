@@ -3,21 +3,21 @@ import Foundation
 import UIKit
 import UserNotifications
 
-/// §6.2 申请时机。
+/// §6.2 Permission timing.
 ///
-/// 规范的两条硬要求：
-/// - **用到的那一刻才申请，启动阶段一律不申请。**
-/// - 通知权限在**收到 `eventLogin` 之后**才申请。未登录状态弹授权拒绝率极高，
-///   多数系统不允许二次申请。
+/// Two mandatory requirements:
+/// - **Request access only when needed, never during startup.**
+/// - Request notification permission **after eventLogin**. Asking before login causes high denial rates,
+///   and most systems restrict subsequent permission prompts.
 ///
-/// 麦克风不走这里：§6.2 要求由 `getUserMedia` 触发，原生在 §7.2 的
-/// `requestMediaCapturePermissionFor` 回调里再向系统申请（见 `ShellUIDelegate`）。
-/// 相册也不走这里：§7.3 用 `PHPickerViewController`，不申请相册权限。
+/// Microphone access is separate: §6.2 requires getUserMedia to trigger the native
+/// requestMediaCapturePermissionFor callback before requesting system access (see ShellUIDelegate).
+/// Photo access is separate: §7.3 uses PHPickerViewController without requesting library permission.
 enum PermissionCoordinator {
 
-  /// Pigeon 的 `getNotificationPermission` 是同步的，而 `UNUserNotificationCenter`
-  /// 只有异步接口 —— 在主线程上等信号量会死锁，所以这里缓存最近一次读到的状态，
-  /// 并在每次回前台、每次申请前后刷新。
+  /// Pigeon's getNotificationPermission is synchronous, while UNUserNotificationCenter
+  /// exposes only asynchronous APIs. Waiting on the main thread would deadlock, so cache the most recent result
+  /// and refresh on foreground entry and before/after permission requests.
   private static let lock = NSLock()
   private static var cached: NotificationPermission = .notDetermined
 
@@ -35,29 +35,29 @@ enum PermissionCoordinator {
     lock.lock()
     let value = cached
     lock.unlock()
-    // 顺手刷一次，下一次读就是新的。
+    // Refresh asynchronously so the next synchronous read sees the updated result.
     refreshNotificationState()
     return value
   }
 
-  /// §6.2 只在收到 `eventLogin` 之后调。
+  /// §6.2 Call only after eventLogin.
   ///
-  /// 启动期调用会被直接拒掉：那一次弹窗的拒绝率极高，而 iOS 不允许二次申请，
-  /// 等于永久放弃这台设备的推送。
+  /// Reject startup requests: denial rates are high and iOS does not allow a second system prompt,
+  /// potentially losing notification access for this device permanently.
   static func requestNotification(
     hasLoggedIn: @escaping () -> Bool,
     completion: @escaping (NotificationPermission) -> Void
   ) {
     refreshNotificationState { current in
-      // 已授权、或已被拒（iOS 拒了就只能去设置页）都不再弹。
+      // Do not prompt after either grant or denial; denied iOS users must use Settings.
       if current == .granted || current == .permanentlyDenied {
         DispatchQueue.main.async { completion(current) }
         return
       }
       guard hasLoggedIn() else {
         NSLog(
-          "[SsgShell] 还没收到 eventLogin，拒绝申请通知权限"
-            + "（§6.2：未登录状态弹授权拒绝率极高，多数系统不允许二次申请）"
+          "[SsgShell] Rejecting notification permission request before eventLogin"
+            + " (§6.2: pre-login requests have high denial rates and systems restrict repeated prompts)"
         )
         DispatchQueue.main.async { completion(current) }
         return
@@ -65,11 +65,11 @@ enum PermissionCoordinator {
       UNUserNotificationCenter.current()
         .requestAuthorization(options: [.alert, .badge, .sound]) { _, error in
           if let error {
-            NSLog("[SsgShell] 申请通知权限失败：\(error.localizedDescription)")
+            NSLog("[SsgShell] Notification permission request failed:\(error.localizedDescription)")
           }
           refreshNotificationState { state in
             DispatchQueue.main.async {
-              // APNs 的 token 注册由 OneSignal SDK 负责（§5.1 分工），壳不碰。
+              // The OneSignal SDK owns APNs token registration under §5.1; the shell does not register it.
               completion(state)
             }
           }
@@ -77,7 +77,7 @@ enum PermissionCoordinator {
     }
   }
 
-  /// §6.2 权限被永久拒绝后的二次引导由原生负责。Web 只能弹一句提示，拿不到系统设置页。
+  /// §6.2 Native code provides settings guidance after permanent denial; the Web application cannot open system settings itself.
   static func openAppSettings() {
     DispatchQueue.main.async {
       guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
@@ -85,13 +85,13 @@ enum PermissionCoordinator {
     }
   }
 
-  /// §7.2 麦克风：`getUserMedia` 触发后才向系统申请，不在启动阶段申请。
+  /// §7.2 Request microphone permission after getUserMedia, never at startup.
   ///
-  /// `Info.plist` 缺 `NSMicrophoneUsageDescription` 时调 `getUserMedia` 会直接崩溃
-  /// （§6.4），所以这里先确认文案在不在。
-  static func requestMicrophone(_ completion: @escaping (Bool) -> Void) {
+  /// Missing NSMicrophoneUsageDescription in Info.plist makes getUserMedia crash (§6.4),
+  /// so verify that the usage description exists first.
+  static func requestMicrophone(completion: @escaping (Bool) -> Void) {
     guard Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") != nil else {
-      NSLog("[SsgShell] Info.plist 缺 NSMicrophoneUsageDescription（§6.4），拒绝麦克风请求以免崩溃")
+      NSLog("[SsgShell] Info.plist lacks NSMicrophoneUsageDescription (§6.4); rejecting microphone access to avoid a crash")
       completion(false)
       return
     }
@@ -103,8 +103,8 @@ enum PermissionCoordinator {
         DispatchQueue.main.async { completion(granted) }
       }
     default:
-      // 拒过了：Web 会弹「麦克风权限被拒绝，请在系统设置中允许后重试」（§6.1），
-      // 去设置页的引导由 `ShellUIDelegate` 紧接着给（§6.2）。
+      // Denied or restricted: the Web application shows "Microphone access was denied; allow it in
+      // Settings and try again" (§6.1), and `ShellUIDelegate` follows with Settings guidance (§6.2).
       completion(false)
     }
   }
@@ -114,7 +114,7 @@ enum PermissionCoordinator {
     case .authorized, .provisional, .ephemeral:
       return .granted
     case .denied:
-      // iOS 拒绝后不允许二次申请，只能去系统设置 —— 按 §6.2 直接算永久拒绝。
+      // iOS cannot prompt again after denial; classify it as permanently denied and direct the user to Settings (§6.2).
       return .permanentlyDenied
     case .notDetermined:
       return .notDetermined
